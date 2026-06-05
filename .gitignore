@@ -1,0 +1,32 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.claude/
+
+# Generated watchlists
+outputs/*
+!outputs/.gitkeep
+
+# Kronos service runtime
+kronos_service.log
+*.pid
+logs/
+
+# OS
+.DS_Store
+
+# Personal portfolio
+portfolio.json

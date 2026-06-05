@@ -1,0 +1,74 @@
+name: Vigil daily signals
+
+# Free, cloud, no always-on machine of your own. Runs market scans on a
+# schedule and pushes Telegram signals to your phone. Uses the Yahoo data
+# fallback (--offline) so no OpenAlice server is needed. Default profile scans
+# liquid brokerage-friendly ETF, FX, commodity ETF, and crypto baskets.
+#
+# Setup (one time):
+#   Repo Settings -> Secrets and variables -> Actions -> add:
+#     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+#   (optional) GEMINI_API_KEY if you want LLM reports instead of templates.
+
+on:
+  schedule:
+    - cron: "0 7,12,16,21 * * 1-5"  # weekdays, multiple market windows
+    - cron: "0 9,21 * * 6,0"        # weekend crypto/FX/commodity check
+  workflow_dispatch:            # also run on demand from the Actions tab
+    inputs:
+      markets:
+        description: "Markets/profile, e.g. global-liquid or us commodities forex crypto"
+        default: "global-liquid"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Vigil
+        uses: actions/checkout@v4
+
+      - name: Clone Kronos
+        run: git clone --depth 1 https://github.com/shiyu-coder/Kronos.git ../Kronos
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-kronos-small
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet -r requirements.txt
+          pip install --quiet -r ../Kronos/requirements.txt
+
+      - name: Run index scan + signal
+        env:
+          LLM_PROVIDER: ${{ secrets.GEMINI_API_KEY && 'gemini' || 'none' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SIGNAL_MARKETS: ${{ vars.SIGNAL_MARKETS || 'global-liquid' }}
+          DEFAULT_PRED_LEN: ${{ vars.DEFAULT_PRED_LEN || '90' }}
+          KRONOS_MC_PATHS: ${{ vars.KRONOS_MC_PATHS || '24' }}
+          MAX_SCREENED_SIZE: ${{ vars.MAX_SCREENED_SIZE || '16' }}
+          MAX_INDEX_COMPONENTS_LOCAL: ${{ vars.MAX_INDEX_COMPONENTS_LOCAL || '80' }}
+          KRONOS_REPO_PATH: ../Kronos
+          KRONOS_DEVICE: cpu
+          USE_DATA_FALLBACK: "true"
+        run: |
+          # Use the dispatch input if given, else the SIGNAL_MARKETS repo variable.
+          python -m scanner.signals ${{ github.event.inputs.markets }}
+
+      - name: Upload watchlist artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vigil-watchlist
+          path: outputs/*.json
+          if-no-files-found: ignore
