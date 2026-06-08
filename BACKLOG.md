@@ -70,3 +70,9 @@ Captured so nothing is lost. Not in priority order within tiers.
 - [DONE] Intraday (1m/5m/15m) short-horizon Kronos forecasts: `intraday.py` CLI
   (the last unused Yahoo endpoint, now wired).
 - Eventually: native app (long future); browser cockpit is the interim.
+
+## Follow-ups (noted during cloud bring-up)
+- DEFAULT_PRED_LEN is still used for SECONDARY forecasts (benchmark ETFs, held/
+  exit review) and as the paper-ledger horizon label. Replace these with the
+  per-pick operative horizon from horizon.select() (and use max(KRONOS_HORIZONS)
+  for benchmarks), so no single global horizon leaks into scoring/labels.
