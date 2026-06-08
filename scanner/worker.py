@@ -56,6 +56,18 @@ class JobRequest(BaseModel):
     max_screened_size: int | None = None
 
 
+@app.get("/")
+def root() -> dict:
+    return {"service": "vigil-worker", "status": "ok"}
+
+
+@app.get("/health")
+def health() -> dict:
+    active = sum(1 for j in JOBS.values() if j.get("status") in {"queued", "running"})
+    return {"status": "ok", "active_jobs": active, "total_jobs": len(JOBS),
+            "auth_required": bool(os.environ.get("VIGIL_WORKER_TOKEN", "").strip())}
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest, x_vigil_token: str | None = Header(None)) -> dict:
     _auth(x_vigil_token)
