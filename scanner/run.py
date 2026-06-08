@@ -161,6 +161,9 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             status(f"      Portfolio: {len(positions)} held "
                    f"({len(local_syms)} local + {len(oa_syms)} OpenAlice)")
         macro = await oa.get_macro(["DGS10", "DTWEXBGS", "CPIAUCSL"])
+        from scanner import regime as REGIME
+        regime_info = await REGIME.detect(macro)
+        status(f"      Regime: {regime_info['regime']} — {regime_info['tilt']}")
 
         # ── [2/6] + [3/6] Screens ─────────────────────────────────────────
         status(f"[2/6] Screening {len(universe)} candidates (fundamental + technical)...")
@@ -172,6 +175,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
 
         # Resolve real names + drop non-tradeable symbols (data quality).
         from scanner.names import resolve_many
+        from scanner import dataquality
         name_map = await resolve_many([c.symbol for c in survivors])
         cleaned = []
         for c in survivors:
@@ -180,6 +184,14 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                 logger.info("Dropping %s (not a tradeable instrument: %s)",
                             c.symbol, info.get("quote_type"))
                 continue
+            # Data-quality guardrails: quarantine garbage before it forecasts.
+            dq = dataquality.analyze(c.symbol, c.ohlcv)
+            if dq["quarantine"]:
+                logger.info("Dropping %s (data quality: %s)",
+                            c.symbol, ", ".join(dq["flags"]))
+                continue
+            if dq["flags"]:
+                c.profile["_dq_flags"] = dq["flags"]
             if not c.profile.get("companyName"):
                 c.profile["companyName"] = info.get("name") or c.symbol
             if not c.sector and info.get("quote_type"):
@@ -198,9 +210,16 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         except KronosServiceError as exc:
             raise SystemExit(f"\nERROR: {exc}\n")
 
-        forecasts = await kronos.forecast_batch(
-            [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in survivors],
-            pred_len=pred_len, n_paths=mc_paths)
+        # Auto horizon selection: forecast at every configured horizon; the
+        # operative one is chosen per-name later (shortest confident + TA-aligned).
+        # Total steps ~= one long forecast, so cost is similar.
+        horizons = cfg.horizon_list
+        survivor_items = [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in survivors]
+        forecasts_by_h: dict[int, dict] = {}
+        for h in horizons:
+            forecasts_by_h[h] = await kronos.forecast_batch(
+                survivor_items, pred_len=h, n_paths=mc_paths)
+        forecasts = forecasts_by_h[max(horizons)]  # default for holdings/exits
 
         benchmark_forecasts: list[dict] = []
         if benchmark_symbols:
@@ -235,19 +254,54 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         generator = ReportGenerator()
         sem = asyncio.Semaphore(8)
 
+        from scanner import forecast_calibration
+        from scanner import entry_exit, horizon as HZ
+        # Sector-relative valuation: median P/E across the scanned set, so each
+        # name is judged cheap/rich vs its actual peers in this scan, not an
+        # absolute threshold. Needs >=4 names with a usable P/E.
+        import statistics as _stats
+        _pes = []
+        for c in survivors:
+            if isinstance(getattr(c, "fundamentals", None), dict):
+                p = c.fundamentals.get("forward_pe") or c.fundamentals.get("trailing_pe")
+                if isinstance(p, (int, float)) and 0 < p < 200:
+                    _pes.append(p)
+        peer_median_pe = _stats.median(_pes) if len(_pes) >= 4 else None
+
         async def build_entry(cand):
-            fc = forecasts.get(cand.symbol)
+            # 1) Technical setup first (the spine) — defines trend + trade levels.
+            ta = entry_exit.analyze(cand.ohlcv)
+            # 2) Auto-select the operative horizon: shortest confident + TA-aligned.
+            per_h = {}
+            for h in horizons:
+                raw = forecasts_by_h.get(h, {}).get(cand.symbol)
+                if raw:
+                    per_h[h] = forecast_calibration.apply(raw, cand.asset_class, h)
+            sel = HZ.select(per_h, ta, horizons)
+            fc = per_h.get(sel.get("horizon_days")) if sel.get("horizon_days") else None
+            op_days = sel.get("horizon_days") or pred_len
+
             news = await oa.get_news(cand.symbol, limit=5)
             earnings = await oa.get_earnings_calendar(cand.symbol) if asset_class == "equity" else {}
-            earnings_soon = _earnings_in_window(earnings, pred_len)
+            earnings_soon = _earnings_in_window(earnings, op_days)
+            fin = {**cand.financials, **cand.fundamentals} if cand.fundamentals else cand.financials
             async with sem:
                 report = await asyncio.to_thread(
                     generator.generate,
-                    cand.symbol, cand.profile, cand.financials, cand.ratios,
+                    cand.symbol, cand.profile, fin, cand.ratios,
                     cand.analyst_estimates, cand.insider_trading, cand.indicators,
                     news, fc or {}, cand.fund_score, cand.tech_score,
                 )
-            # Annotate tags with structural flags.
+            # Horizon class is now an OUTPUT of selection, not a user/heuristic input.
+            report["horizon"] = sel["horizon_class"]
+            report["_horizon_days"] = sel.get("horizon_days")
+            report["_forecast_agrees"] = sel.get("agrees")
+            report["_forecast_confidence"] = sel.get("confidence")
+            report["_term_structure"] = sel.get("term_structure")
+            if cand.fund_breakdown:
+                report["_fund_breakdown"] = cand.fund_breakdown
+            if isinstance(cand.fundamentals, dict) and cand.fundamentals.get("_frameworks"):
+                report["_frameworks"] = cand.fundamentals["_frameworks"]
             tags = list(report.get("tags", []))
             if cand.symbol in held:
                 tags.append("held")
@@ -255,9 +309,87 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                 tags.append("earnings_in_window")
             if asset_class in {"crypto", "etf", "commodity", "forex"}:
                 tags.append(asset_class)
+            if not sel.get("agrees"):
+                tags.append("forecast_disagrees")   # Kronos does not confirm the TA setup
+            if cand.profile.get("_dq_flags"):
+                report["_dq_flags"] = cand.profile["_dq_flags"]
+                tags.append("data_warning")
+            if peer_median_pe and isinstance(cand.fundamentals, dict):
+                pe = cand.fundamentals.get("forward_pe") or cand.fundamentals.get("trailing_pe")
+                if isinstance(pe, (int, float)) and pe > 0:
+                    ratio = pe / peer_median_pe
+                    report["_valuation_relative"] = {
+                        "pe": round(pe, 1), "peer_median_pe": round(peer_median_pe, 1),
+                        "ratio": round(ratio, 2)}
+                    tags.append("val_cheap_vs_peers" if ratio < 0.85 else (
+                        "val_rich_vs_peers" if ratio > 1.15 else "val_inline_peers"))
             if cand.sector:
                 tags.append(cand.sector.lower().replace(" ", "_"))
-            report["tags"] = list(dict.fromkeys(tags))  # dedupe, keep order
+            report["tags"] = list(dict.fromkeys(tags))
+            # TA structure levels = the trade plan (not the wide forecast cone).
+            report["_ta"] = ta
+            if ta.get("setup") and ta.get("rr_value") and ta["rr_value"] > 0:
+                report["entry_zone"] = ta["entry_zone"]
+                report["stop_loss"] = f"{ta['stop']} ({ta['setup']})"
+                report["target"] = ta["target"]
+                report["risk_reward"] = ta["rr"]
+                report["trail_stop"] = ta.get("trail_stop")
+                report["setup"] = ta["setup"]
+                report["confluence"] = ta["confluence"]
+            # ── Full Kronos features ──
+            try:
+                from scanner import kronos_features as KF
+                if fc:
+                    report["_kronos_features"] = fc.get("features")
+                    # Real probability-weighted R:R from the path cloud + TA levels.
+                    if ta.get("entry_value") and ta.get("stop_value") and ta.get("target_value"):
+                        report["_barrier"] = KF.barrier_probabilities(
+                            fc, ta["entry_value"], ta["stop_value"], ta["target_value"])
+                    # For assets with no fundamentals, Kronos IS the quality score.
+                    if asset_class in ("crypto", "forex", "commodity", "index"):
+                        kq, kqbd = KF.kronos_quality(fc)
+                        report["_kronos_quality"] = kq
+                        report["_kronos_quality_breakdown"] = kqbd
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("kronos_features failed for %s: %s", cand.symbol, exc)
+            # Meta-model calibrated P(up), if one has been trained — additive.
+            try:
+                from scanner import meta_model
+                mp = meta_model.predict_proba({
+                    "predicted_return_pct": (fc or {}).get("expected_return_pct"),
+                    "prob_up": (fc or {}).get("prob_up"),
+                    "fund_score": cand.fund_score, "tech_score": cand.tech_score,
+                    "conviction": report.get("conviction"),
+                    "features": cand.indicators})
+                if mp is not None:
+                    report["_meta_prob_up"] = mp
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("meta_model failed for %s: %s", cand.symbol, exc)
+            # Yahoo insights (their technical S/R + outlook) and peers — free,
+            # best-effort, independent of OpenAlice. Equities/ETFs/indexes mostly.
+            try:
+                from scanner import yahoo
+                ins = await yahoo.insights(cand.symbol)
+                if ins:
+                    report["_insights"] = ins
+                peers = await yahoo.recommendations(cand.symbol)
+                if peers:
+                    report["_peers"] = peers[:6]
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("yahoo insights/peers failed for %s: %s", cand.symbol, exc)
+            # Options / vol edge — Kronos vol vs implied vol, P(>strike), idea.
+            if asset_class in ("equity", "etf") and fc:
+                try:
+                    from scanner import options as OPT
+                    opt = await OPT.analyze(cand.symbol, fc, op_days)
+                    if opt.get("has_options"):
+                        report["_options"] = opt
+                        if opt.get("vol_call", "").startswith("options cheap"):
+                            report.setdefault("tags", []).append("vol_cheap")
+                        elif opt.get("vol_call", "").startswith("options rich"):
+                            report.setdefault("tags", []).append("vol_rich")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options failed for %s: %s", cand.symbol, exc)
             return {"report": report, "forecast": fc, "sector": cand.sector,
                     "indicators": cand.indicators,
                     "fund_score": cand.fund_score, "tech_score": cand.tech_score}
@@ -276,9 +408,17 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             "lookback": cfg.default_lookback,
             "model": cfg.kronos_model,
         }
+        watchlist["regime"] = regime_info
         if args.max_results:
             watchlist["watchlist"] = watchlist["watchlist"][: args.max_results]
         path = out.save(watchlist)
+        # Paper-trading ledger: log every pick for later scoring (the feedback
+        # loop that trains the meta-model). Cheap, best-effort.
+        try:
+            from scanner import paper
+            paper.log_signals(watchlist, pred_len)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("paper ledger log failed: %s", exc)
         status(f"Done. Watchlist: {len(watchlist['watchlist'])} names"
                + (f", {len(exits)} exit signals" if exits else "") + f" -> {path}")
 

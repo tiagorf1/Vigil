@@ -124,6 +124,15 @@ def compute_all(ohlcv: list[dict]) -> dict:
             out["vol_vs_avg"] = float(df["volume"].iloc[-1] / avg30)
 
     out.update(_performance_metrics(df, close))
+    # Clean printing: round raw indicator values (RSI, MACD, SMAs, ATR, bands).
+    _round = {"price": 4, "rsi14": 1, "macd_hist": 4, "sma50": 4, "sma200": 4,
+              "atr14": 4, "bb_upper": 4, "bb_mid": 4, "bb_lower": 4}
+    for k, nd in _round.items():
+        if isinstance(out.get(k), (int, float)):
+            out[k] = round(out[k], nd)
+    for k in ("ret_7d", "ret_30d", "vol_vs_avg"):
+        if isinstance(out.get(k), (int, float)):
+            out[k] = round(out[k], 4)
     return out
 
 

@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -33,6 +33,14 @@ app = FastAPI(title="Vigil Remote Worker", version="0.1.0")
 
 JOBS: dict[str, dict] = {}
 LOCK = threading.Lock()
+
+
+def _auth(token: str | None) -> None:
+    """If VIGIL_WORKER_TOKEN is set, require it on every request (X-Vigil-Token).
+    Lets you expose the port safely without handing the world free compute."""
+    want = os.environ.get("VIGIL_WORKER_TOKEN", "").strip()
+    if want and (token or "").strip() != want:
+        raise HTTPException(status_code=401, detail="bad or missing X-Vigil-Token")
 
 
 class JobRequest(BaseModel):
@@ -49,7 +57,8 @@ class JobRequest(BaseModel):
 
 
 @app.post("/jobs")
-def create_job(req: JobRequest) -> dict:
+def create_job(req: JobRequest, x_vigil_token: str | None = Header(None)) -> dict:
+    _auth(x_vigil_token)
     with LOCK:
         if any(j.get("status") in {"queued", "running"} for j in JOBS.values()):
             raise HTTPException(status_code=409, detail="Worker already has an active job.")
@@ -77,7 +86,8 @@ def get_job(job_id: str) -> dict:
 
 
 @app.get("/jobs/{job_id}/result")
-def get_result(job_id: str) -> JSONResponse:
+def get_result(job_id: str, x_vigil_token: str | None = Header(None)) -> JSONResponse:
+    _auth(x_vigil_token)
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")

@@ -78,7 +78,10 @@ async def calibrate() -> dict:
 
     hits = errs = brier = scored = 0.0
     samples = []
-    async with OpenAliceClient(cfg.openalice_mcp_url) as oa:
+    prob_pairs = []  # (predicted_prob_up, realized_up) for the reliability curve
+    # offline=True -> realized closes come from the free Yahoo source, so
+    # calibration works with no OpenAlice running.
+    async with OpenAliceClient(cfg.openalice_mcp_url, offline=True) as oa:
         for p in matured:
             realized = await _realized_return(oa, p)
             if realized is None:
@@ -90,6 +93,7 @@ async def calibrate() -> dict:
             errs += abs(exp - realized * 100)  # realized is fraction
             if isinstance(p.get("prob_up"), (int, float)):
                 brier += (p["prob_up"] - (1 if realized > 0 else 0)) ** 2
+                prob_pairs.append((p["prob_up"], 1 if realized > 0 else 0))
             samples.append({
                 "symbol": p["symbol"], "generated_at": p["generated_at"],
                 "expected_return_pct": exp, "realized_return_pct": round(realized * 100, 2),
@@ -102,12 +106,31 @@ async def calibrate() -> dict:
             "hit_rate": round(hits / scored, 3),
             "mae_ret_pct": round(errs / scored, 2),
             "brier": round(brier / scored, 3) if scored else None,
+            "reliability": _reliability(prob_pairs),
             "samples": samples[-50:],
         })
     (outputs_dir / "calibration.json").write_text(json.dumps(result, indent=2))
     logger.info("Calibration: hit_rate=%s mae=%s brier=%s (n=%d)",
                 result["hit_rate"], result["mae_ret_pct"], result["brier"], int(scored))
     return result
+
+
+def _reliability(pairs: list) -> list:
+    """Reliability curve: per probability bucket, predicted vs realized up-rate.
+    A well-calibrated model has realized ~= predicted in each bucket."""
+    if not pairs:
+        return []
+    bins = [(0.0, 0.4), (0.4, 0.55), (0.55, 0.7), (0.7, 0.85), (0.85, 1.01)]
+    out = []
+    for lo, hi in bins:
+        sel = [(p, y) for p, y in pairs if lo <= p < hi]
+        if not sel:
+            continue
+        pred = sum(p for p, _ in sel) / len(sel)
+        real = sum(y for _, y in sel) / len(sel)
+        out.append({"bucket": f"{lo:.2f}-{hi:.2f}", "n": len(sel),
+                    "predicted": round(pred, 3), "realized": round(real, 3)})
+    return out
 
 
 async def _realized_return(oa: OpenAliceClient, pick: dict) -> float | None:

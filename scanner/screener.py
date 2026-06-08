@@ -41,6 +41,8 @@ class Candidate:
     news: list = field(default_factory=list)
     ohlcv: list = field(default_factory=list)
     sector: str = ""
+    fundamentals: dict = field(default_factory=dict)
+    fund_breakdown: dict = field(default_factory=dict)
 
     @property
     def combined(self) -> float:
@@ -99,6 +101,28 @@ class Screener:
 
     # ── fundamental: equity ───────────────────────────────────────────────
     async def _score_fundamental_equity(self, c: Candidate) -> None:
+        # Primary: reliable normalized fundamentals (Yahoo) - works offline AND
+        # online, scored with real methodology. Falls back to OpenAlice fields.
+        from scanner import fundamentals as F
+        m = await F.fetch(c.symbol)
+        if m and m.get("current_price") is not None:
+            if m.get("name") and not c.profile.get("companyName"):
+                c.profile["companyName"] = m["name"]
+            c.sector = m.get("sector") or c.sector
+            # ETFs / funds have no company fundamentals — a valuation score on
+            # them is misleading. Score on momentum and mark fundamentals N/A.
+            real = any(isinstance(m.get(k), (int, float)) for k in
+                       ("revenue_growth", "profit_margin", "roe", "earnings_growth"))
+            if not real:
+                c.fundamentals = {"note": "no company fundamentals (ETF/fund/index)"}
+                self._score_fundamental_momentum(c)
+                return
+            c.fundamentals = m
+            c.fund_score, c.fund_breakdown = F.score(m)
+            return
+        await self._score_fundamental_equity_openalice(c)
+
+    async def _score_fundamental_equity_openalice(self, c: Candidate) -> None:
         profile, financials, ratios, estimates, insider = await asyncio.gather(
             self.client.get_profile(c.symbol),
             self.client.get_financials(c.symbol),

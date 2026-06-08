@@ -1,4 +1,7 @@
 # Vigil
+<<<<<<< HEAD
+Project
+=======
 
 *Markets Watch.* A local investment opportunity scanner. Builds a candidate
 universe from **OpenAlice** market data (or a free Yahoo fallback), screens it on
@@ -204,3 +207,4 @@ tests/           unit + integration tests
   `openalice_client.get_ohlcv`.
 - **Kronos slow** — CPU inference is ~30–60s/symbol; Apple `mps` / CUDA is far
   faster. Set `KRONOS_DEVICE` in `.env` to force a device.
+>>>>>>> fe5d6a0 (Initial Vigil scanner)

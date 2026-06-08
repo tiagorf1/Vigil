@@ -134,8 +134,54 @@ def start_scan(req: ScanRequest) -> dict:
     if JOB["running"]:
         raise HTTPException(status_code=409, detail="A scan is already running.")
     _reset_job("scan", req.directive or "(broad sweep)")
-    threading.Thread(target=_run_scan_job, args=(req,), daemon=True).start()
-    return {"started": True}
+    worker = get_config().vigil_worker_url
+    target = _run_remote_job if worker else _run_scan_job
+    threading.Thread(target=target, args=(req,), daemon=True).start()
+    return {"started": True, "where": "cloud" if worker else "local"}
+
+
+def _run_remote_job(req: ScanRequest) -> None:
+    """Forward the scan to the cloud worker; mirror its progress; save the result
+    locally so the cockpit renders it. This is the 'never on the Mac' path."""
+    import time as _t
+    cfg = get_config()
+    base = cfg.vigil_worker_url.rstrip("/")
+    hdr = {"X-Vigil-Token": cfg.vigil_worker_token} if cfg.vigil_worker_token else {}
+    try:
+        body = req.model_dump()
+        body["offline"] = True   # cloud worker has no OpenAlice
+        with httpx.Client(timeout=30, headers=hdr) as c:
+            r = c.post(f"{base}/jobs", json=body)
+            if r.status_code == 409:
+                JOB["error"] = "Cloud worker is busy with another job."
+                return
+            r.raise_for_status()
+            jid = r.json()["job_id"]
+            _on_status(f"Submitted to cloud worker ({jid})...")
+            while True:
+                s = c.get(f"{base}/jobs/{jid}").json()
+                JOB["stage_text"] = s.get("stage_text", "running")
+                _on_status_passthrough(s.get("stage_text", ""))
+                if s.get("status") in {"done", "completed", "finished", "error", "failed"}:
+                    if s.get("error"):
+                        JOB["error"] = f"Cloud: {s['error']}"
+                    else:
+                        res = c.get(f"{base}/jobs/{jid}/result").json()
+                        (OUTPUTS_DIR / "latest.json").write_text(json.dumps(res, default=str))
+                        JOB["result"] = "latest.json"
+                    return
+                _t.sleep(2)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("remote job failed")
+        JOB["error"] = f"Cloud worker unreachable: {exc}"
+    finally:
+        JOB["running"] = False
+        JOB["stage"] = JOB["total"]
+
+
+def _on_status_passthrough(msg: str) -> None:
+    if msg and (not JOB["log"] or JOB["log"][-1] != msg):
+        _on_status(msg)
 
 
 @app.post("/api/calibrate")
@@ -153,7 +199,8 @@ class PortfolioAdd(BaseModel):
     entry_price: float | None = None
     qty: float | None = None
     note: str = ""
-    asset_class: str = "equity"
+    asset_class: str = ""
+    entry_date: str = ""
 
 
 class ReportInboxPush(BaseModel):
@@ -172,8 +219,15 @@ def portfolio_add(req: PortfolioAdd) -> dict:
     from scanner.portfolio import PortfolioStore
     rec = PortfolioStore().add(
         req.symbol, entry_price=req.entry_price, qty=req.qty,
-        note=req.note, name=req.name, asset_class=req.asset_class)
+        note=req.note, name=req.name, asset_class=req.asset_class,
+        entry_date=req.entry_date)
     return {"added": rec}
+
+
+@app.get("/api/portfolio/performance")
+async def portfolio_performance() -> dict:
+    from scanner.portfolio import PortfolioStore
+    return await PortfolioStore().performance()
 
 
 @app.post("/api/portfolio/remove")

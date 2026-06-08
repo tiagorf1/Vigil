@@ -22,14 +22,27 @@ class WatchlistOutput:
               exits: list[dict] | None = None, benchmarks: list[dict] | None = None,
               max_per_sector: int = 3) -> dict:
         """`entries` items: {report, forecast, fund_score, tech_score, sector}."""
+        from scanner import scoring, sizing
         held = {p.get("symbol") for p in (positions or [])}
         items = []
         for e in entries:
             report = e.get("report", {})
             forecast = e.get("forecast") or {}
+            vigil_score, score_breakdown = scoring.composite(
+                report, forecast, e.get("fund_score"), e.get("tech_score"))
+            report["_score"] = vigil_score
+            report["_score_breakdown"] = score_breakdown
+            size = sizing.from_pick(
+                report, forecast, equity=self.cfg.account_equity,
+                kelly_fraction_used=self.cfg.sizing_kelly_fraction,
+                target_vol=self.cfg.sizing_target_vol)
+            if size.get("weight_pct") is not None:
+                report["_sizing"] = size
             items.append({
                 "symbol": report.get("symbol"),
                 "name": report.get("name"),
+                "score": vigil_score,
+                "score_breakdown": score_breakdown,
                 "conviction": int(report.get("conviction", 3)),
                 "horizon": report.get("horizon", "medium"),
                 "metrics": _pick_metrics(e.get("indicators") or {}),
@@ -186,9 +199,14 @@ def _decision_shapers(ind: dict, forecast: dict, fund_score, tech_score) -> dict
 
 
 def _sort_key(item: dict):
+    """Rank by the composite Vigil score first (it already folds in conviction,
+    barrier edge, calibrated P(up) and quality), then conviction and raw return
+    as tie-breakers."""
+    score = item.get("score")
+    score = score if isinstance(score, (int, float)) else -1
     exp = item.get("expected_return_pct")
     exp = exp if isinstance(exp, (int, float)) else -999
-    return (item.get("conviction", 0), exp)
+    return (score, item.get("conviction", 0), exp)
 
 
 def _diversify(items: list[dict], max_size: int, max_per_sector: int) -> list[dict]:

@@ -150,6 +150,7 @@ main{display:grid;grid-template-columns:minmax(330px,35%) 1fr;flex:1;min-height:
 .row .st{color:var(--claret);font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-family:var(--sans);font-weight:800;margin-top:2px}
 .row .rt{text-align:right;font-family:var(--sans);font-size:12px;line-height:1.35;font-weight:700;font-variant-numeric:tabular-nums}
 .row .rtstats{display:grid;grid-template-columns:repeat(3,minmax(38px,1fr));gap:4px;margin-top:5px;min-width:138px}
+.row .vscore{display:inline-block;font-family:var(--sans);font-weight:800;font-size:12px;background:var(--ink-strong);color:var(--paper);border-radius:3px;padding:1px 6px;margin-bottom:3px;font-variant-numeric:tabular-nums}
 .row .mini{border-left:1px solid var(--rule);padding-left:5px}
 .row .mini:first-child{border-left:none}
 .row .lab{display:block;font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:800}
@@ -182,6 +183,13 @@ main{display:grid;grid-template-columns:minmax(330px,35%) 1fr;flex:1;min-height:
 .pfbtn{background:var(--ink-strong);color:var(--paper);border:none;font-family:var(--sans);font-weight:800;font-size:11px;
   letter-spacing:.1em;text-transform:uppercase;padding:10px 18px;border-radius:3px;cursor:pointer;margin-top:18px}
 .pfbtn:hover{background:var(--claret)}
+.pfadd{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 18px;padding:12px 14px;background:var(--card);border:1px solid var(--rule-2);border-radius:4px}
+.pfadd input{background:var(--paper);border:1px solid var(--rule-2);border-radius:3px;padding:8px 10px;font-family:var(--sans);font-size:13px;color:var(--ink-strong)}
+.pfadd input#pf-sym{width:110px;text-transform:uppercase;font-weight:700}
+.pfadd input#pf-price,.pfadd input#pf-qty{width:88px}
+.pfadd .pfbtn{margin:0;padding:9px 16px}
+.pfstat{display:inline-block;margin-right:18px;font-family:var(--sans);font-size:12px;color:var(--dim);font-weight:600}
+.pfstat b{font-family:var(--serif);font-size:17px;color:var(--ink-strong);font-variant-numeric:tabular-nums}
 .rsub{display:grid;grid-template-columns:repeat(5,minmax(92px,1fr));gap:0;font-family:var(--sans);
   color:var(--dim);margin:16px 0 24px;border:1px solid var(--rule-2);border-bottom:2px solid var(--ink-strong);background:var(--card)}
 .stat{padding:10px 12px;border-right:1px solid var(--rule)}
@@ -359,12 +367,12 @@ function fan(candles,current,cone){
   const base=current!=null?`<line x1="0" y1="${Y(current).toFixed(1)}" x2="${w}" y2="${Y(current).toFixed(1)}" stroke="var(--rule-2)" stroke-dasharray="3 3" stroke-width="1"/>`:'';
   return `<div class="spark"><svg viewBox="0 0 ${w} ${h}" width="100%" height="92" preserveAspectRatio="none">
     ${band}${base}<polyline points="${ln}" fill="none" stroke="${col}" stroke-width="1.8"/></svg>
-    ${has?'<div class="cap">Shaded 5–95% Kronos cone · dashed today</div>':''}</div>`;
+    ${has?'<div class="cap">95% Kronos cone (CI) · dashed today</div>':''}</div>`;
 }
 function probLine(it){
   if(typeof it.prob_up!=='number')return '';
   const a=it.ret_q05_pct,b=it.ret_q95_pct;
-  const band=(typeof a==='number'&&typeof b==='number')?` &nbsp;·&nbsp; 90% range <span class="${a<0?'dn':'up'}">${a>=0?'+':''}${a.toFixed(1)}%</span> → <span class="${b<0?'dn':'up'}">${b>=0?'+':''}${b.toFixed(1)}%</span>`:'';
+  const band=(typeof a==='number'&&typeof b==='number')?` &nbsp;·&nbsp; 95% range <span class="${a<0?'dn':'up'}">${a>=0?'+':''}${a.toFixed(1)}%</span> → <span class="${b<0?'dn':'up'}">${b>=0?'+':''}${b.toFixed(1)}%</span>`:'';
   return `<div class="probline">${ptag(it.prob_up)}${band}</div>`;
 }
 
@@ -393,7 +401,7 @@ function renderList(){
       <div><div class="tk">${esc(it.symbol)}${it.held?' <span class="held">HELD</span>':''}</div>
       <div class="nm">${esc(it.name||'')}</div>
       <div class="st">${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(it.horizon||'med')}</span></div></div>
-      <div class="rt">${stars(it.conviction)}
+      <div class="rt">${typeof it.score==='number'?`<div class="vscore" title="Vigil score">${it.score.toFixed(0)}</div>`:''}${stars(it.conviction)}
         <div class="rtstats">
           ${metricMini('RET',rawPct(it.expected_return_pct),retCls(it.expected_return_pct))}
           ${metricMini('P↑',rawProb(it.prob_up),probCls(it.prob_up))}
@@ -452,35 +460,150 @@ function render(it){
      ${API.has?`<button class="addbtn" onclick="addToPortfolio()">＋ Portfolio</button>`:''}
      <span class="badge sig">${esc(it.strategy_type||'')}</span></div>
    <div class="rsub">
+     ${typeof it.score==='number'?statTile('Vigil score',sbar(it.score)):''}
      ${statTile('Conviction',`${stars(it.conviction)} <small>${it.conviction}/5</small>`)}
      ${statTile('Kronos ret',pct(it.expected_return_pct))}
      ${statTile('Probability up',rawProb(it.prob_up))}
      ${statTile('Fund score',sbar(sc.fundamental))}
      ${statTile('Tech score',sbar(sc.technical))}
    </div>
-   <div class="block"><h2>Thesis</h2><div class="thesis">${esc(r.thesis)}</div></div>
-   ${(r.reasons&&r.reasons.length)?`<div class="block"><h2>Why now</h2><ul class="why">${r.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
-   ${decisionBlock(it)}
-   ${metricsBlock(it.metrics)}
-   <div class="block"><div class="cols">
-     <div><h3>Fundamentals</h3><p>${esc(r.fundamental_summary)}</p></div>
-     <div><h3>Technicals</h3><p>${esc(r.technical_summary)}</p></div>
-     <div><h3>Forecast</h3><p>${esc(r.forecast_summary)}</p>${fan(it.forecast_candles,it.current_close,it.cone)}${probLine(it)}</div>
-   </div></div>
-   <div class="block"><h2>Strategy</h2><div class="strat">
-     <div class="cell"><div class="k">Entry</div><div class="v">${esc(r.entry_zone)}</div></div>
-     <div class="cell"><div class="k">Stop</div><div class="v">${esc(r.stop_loss)}</div></div>
-     <div class="cell"><div class="k">Target</div><div class="v">${esc(r.target)}</div></div>
-     <div class="cell"><div class="k">Risk / Reward</div><div class="v">${esc(r.risk_reward)}</div></div>
-   </div></div>
-   <div class="block"><h2>Risks</h2><ul class="risks">${(r.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
-   <div class="block"><h2>Tags</h2><div class="tags">${(it.tags||[]).map(t=>`<span class="badge">${esc(t)}</span>`).join('')||'<span style="color:var(--faint)">none</span>'}</div></div>
+   <div style="display:flex;gap:2px;border-bottom:2px solid var(--ink-strong);margin-bottom:20px">
+     <button class="vtab" data-tab="report" onclick="switchTab('report')" style="background:none;border:none;font-family:var(--sans);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--ink-strong);border-bottom:2px solid var(--claret);margin-bottom:-2px">Report</button>
+     <button class="vtab" data-tab="data" onclick="switchTab('data')" style="background:none;border:none;font-family:var(--sans);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--faint);border-bottom:2px solid transparent;margin-bottom:-2px">Data &amp; stats</button>
+   </div>
+   <div id="tab-report">
+     ${dqBlock(r)}
+     <div class="block"><h2>Thesis</h2><div class="thesis">${esc(r.thesis)}</div></div>
+     ${(r.reasons&&r.reasons.length)?`<div class="block"><h2>Why now</h2><ul class="why">${r.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
+     ${decisionBlock(it)}
+     ${setupBlock(r)}
+     <div class="block"><h2>Strategy</h2><div class="strat">
+       <div class="cell"><div class="k">Entry</div><div class="v">${esc(r.entry_zone)}</div></div>
+       <div class="cell"><div class="k">Stop</div><div class="v">${esc(r.stop_loss)}</div></div>
+       <div class="cell"><div class="k">Target</div><div class="v">${esc(r.target)}</div></div>
+       <div class="cell"><div class="k">Risk / Reward</div><div class="v">${esc(r.risk_reward)}</div></div>
+     </div></div>
+     ${sizingBlock(r)}
+     <div class="block"><h2>Risks</h2><ul class="risks">${(r.risks||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>
+   </div>
+   <div id="tab-data" style="display:none">
+     ${probLine(it)}
+     ${scoreBlock(it)}
+     ${barrierBlock(r)}${termBlock(r)}${kfeatBlock(r)}${kqualBlock(r)}
+     ${optionsBlock(r)}${insightsBlock(r)}${peersBlock(r)}
+     ${metricsBlock(it.metrics)}${fbreakBlock(r)}${frameworksBlock(r)}${valRelBlock(r)}
+     <div class="block"><div class="cols">
+       <div><h3>Fundamentals</h3><p>${esc(r.fundamental_summary)}</p></div>
+       <div><h3>Technicals</h3><p>${esc(r.technical_summary)}</p></div>
+       <div><h3>Forecast</h3><p>${esc(r.forecast_summary)}</p>${fan(it.forecast_candles,it.current_close,it.cone)}</div>
+     </div></div>
+     <div class="block"><h2>Tags</h2><div class="tags">${(it.tags||[]).map(t=>`<span class="badge">${esc(t)}</span>`).join('')||'<span style="color:var(--faint)">none</span>'}</div></div>
+   </div>
   </div>`;
 }
+function switchTab(t){
+  document.querySelectorAll('.vtab').forEach(b=>{const on=b.dataset.tab===t;
+    b.style.color=on?'var(--ink-strong)':'var(--faint)';
+    b.style.borderBottom='2px solid '+(on?'var(--claret)':'transparent');});
+  const rp=document.getElementById('tab-report'),dp=document.getElementById('tab-data');
+  if(rp)rp.style.display=t==='report'?'':'none'; if(dp)dp.style.display=t==='data'?'':'none';
+}
+function dgrid(cells){return cells?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));border:1px solid var(--rule-2)">${cells}</div>`:'';}
+function dcell(k,v){return `<div class="cell"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;}
+function _p(v,suf='%',dp=1){return typeof v==='number'?(suf==='%'?(v>=0?'+':'')+v.toFixed(dp)+'%':v.toFixed(dp)):'—';}
+function barrierBlock(r){const b=r._barrier;if(!b||b.p_target_first==null)return '';
+  return `<div class="block"><h2>Barrier probabilities · Kronos paths × your levels</h2>${dgrid(
+    dcell('P(target first)',(b.p_target_first*100).toFixed(0)+'%')+
+    dcell('P(stop first)',(b.p_stop_first*100).toFixed(0)+'%')+
+    dcell('P(neither)',(b.p_neither*100).toFixed(0)+'%')+
+    dcell('Prob-weighted R',b.prob_R==null?'—':b.prob_R)+
+    dcell('~days to target',b.expected_days_to_target==null?'—':b.expected_days_to_target))}</div>`;}
+function termBlock(r){const t=r._term_structure;if(!t||!t.length)return '';
+  return `<div class="block"><h2>Horizon term structure</h2>${dgrid(t.map(h=>
+    dcell(h.days+'d · '+(h['class']||''),`${_p(h.expected_return_pct)} · P↑${h.prob_up!=null?(h.prob_up*100).toFixed(0)+'%':'—'} ${h.ta_agrees?'✓':'✗'}`)).join(''))}</div>`;}
+function kfeatBlock(r){const f=r._kronos_features;if(!f)return '';
+  const defs=[['Pred. range','expected_range_pct','%'],['Max adverse','mae_pct','%'],['Max favorable','mfe_pct','%'],['Skew','skew','n'],['CVaR 5%','cvar5_pct','%'],['Ret/vol','ret_vol_ratio','n'],['Vol trend','vol_trend','n'],['P(up>5%)','prob_up_5pct','p']];
+  let c='';defs.forEach(([lab,k,u])=>{const v=f[k];if(typeof v!=='number')return;
+    const d=u==='p'?(v*100).toFixed(0)+'%':(u==='%'?_p(v):v.toFixed(2));c+=dcell(lab,d);});
+  return c?`<div class="block"><h2>Kronos forecast features</h2>${dgrid(c)}</div>`:'';}
+function kqualBlock(r){const q=r._kronos_quality;if(typeof q!=='number')return '';
+  const bd=r._kronos_quality_breakdown||{};
+  return `<div class="block"><h2>Kronos quality ${q.toFixed(0)}/100 · price-only asset</h2>${dgrid(Object.entries(bd).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
+function fbreakBlock(r){const b=r._fund_breakdown;if(!b)return '';
+  return `<div class="block"><h2>Fundamental score breakdown</h2>${dgrid(Object.entries(b).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
+function dqBlock(r){const f=r._dq_flags;if(!f||!f.length)return '';
+  return `<div class="block" style="border-left:3px solid var(--claret);padding-left:12px"><h2 style="color:var(--claret)">Data warning</h2><div class="tags">${f.map(x=>`<span class="badge">${esc(x)}</span>`).join('')}</div><div style="color:var(--faint);font-size:12px;margin-top:6px">Treat this pick with extra caution — the price history shows quality issues.</div></div>`;}
+function sizingBlock(r){const s=r._sizing;if(!s||s.weight_pct==null)return '';
+  let cells=dcell('Suggested weight',s.weight_pct.toFixed(1)+'%');
+  if(s.dollar!=null)cells+=dcell('Amount','$'+Number(s.dollar).toLocaleString());
+  if(s.kelly_full!=null)cells+=dcell('Full Kelly',(s.kelly_full*100).toFixed(1)+'%');
+  if(s.vol_target_pct!=null)cells+=dcell('Vol-target wt',s.vol_target_pct.toFixed(1)+'%');
+  if(s.binding)cells+=dcell('Binding constraint',esc(s.binding));
+  const note=s.rationale?`<div style="color:var(--faint);font-size:12px;margin-top:8px">${esc(s.rationale)} · advisory only</div>`:'';
+  return `<div class="block"><h2>Position sizing</h2>${dgrid(cells)}${note}</div>`;}
+function setupBlock(r){const t=r._ta;if(!t||!t.setup)return '';
+  const mp=r._meta_prob_up;
+  const rows=[['Setup',esc(t.setup)],['Trend',esc(t.trend||'—')],
+    ['ADX',t.adx==null?'—':t.adx],['Confluence',(t.confluence||0)+'/5'],
+    ['Trailing stop',t.trail_stop==null?'—':t.trail_stop]];
+  if(typeof mp==='number')rows.push(['Calibrated P(up)',(mp*100).toFixed(0)+'%']);
+  const sigs=(t.signals&&t.signals.length)?`<ul class="why" style="margin-top:10px">${t.signals.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:'';
+  return `<div class="block"><h2>Technical setup</h2>${dgrid(rows.map(([k,v])=>dcell(k,v)).join(''))}${sigs}</div>`;}
+function scoreBlock(it){const b=(it.report||{})._score_breakdown;if(!b)return '';
+  const w=b._weights||{};
+  const cells=Object.entries(b).filter(([k])=>k[0]!=='_')
+    .map(([k,v])=>dcell(k+(w[k]?` ·w${w[k]}`:''),v)).join('');
+  const pen=b._penalty?`<div style="color:var(--claret);font-size:12px;margin-top:8px">${esc(b._penalty)}</div>`:'';
+  return `<div class="block"><h2>Vigil score ${typeof it.score==='number'?it.score.toFixed(0):'—'}/100 · how it's built</h2>${dgrid(cells)}${pen}</div>`;}
+function insightsBlock(r){const i=r._insights;if(!i||!Object.values(i).some(v=>v!=null))return '';
+  const rows=[['Short-term',i.short_term],['Intermediate',i.intermediate_term],['Long-term',i.long_term],
+    ['Support',i.support],['Resistance',i.resistance],['Yahoo stop',i.stop_loss],['Valuation',i.valuation]];
+  const cells=rows.filter(([,v])=>v!=null&&v!=='').map(([k,v])=>dcell(k,esc(String(v)))).join('');
+  return cells?`<div class="block"><h2>Yahoo insights · independent read</h2>${dgrid(cells)}</div>`:'';}
+function peersBlock(r){const p=r._peers;if(!p||!p.length)return '';
+  return `<div class="block"><h2>Peers</h2><div class="tags">${p.map(s=>`<span class="badge">${esc(s)}</span>`).join('')}</div></div>`;}
+function optionsBlock(r){const o=r._options;if(!o||!o.has_options)return '';
+  const edge=o.vol_edge;
+  const tone=typeof edge==='number'?(edge>2?'up':(edge<-2?'dn':'')):'';
+  let cells='';
+  if(o.kronos_vol_pct!=null)cells+=dcell('Kronos vol',o.kronos_vol_pct.toFixed(1)+'%');
+  if(o.implied_vol_pct!=null)cells+=dcell('Implied vol',o.implied_vol_pct.toFixed(1)+'%');
+  if(edge!=null)cells+=dcell('Vol edge',`<span class="${tone}">${(edge>=0?'+':'')+edge.toFixed(1)}</span>`);
+  if(o.implied_move_pct!=null)cells+=dcell('Implied move',o.implied_move_pct.toFixed(1)+'%');
+  if(o.atm_iv_pct!=null)cells+=dcell('ATM IV',o.atm_iv_pct.toFixed(0)+'%');
+  if(o.p_above_call_strike!=null)cells+=dcell('P(> call strike)',(o.p_above_call_strike*100).toFixed(0)+'%');
+  if(o.p_below_put_strike!=null)cells+=dcell('P(< put strike)',(o.p_below_put_strike*100).toFixed(0)+'%');
+  if(o.put_call_oi_ratio!=null)cells+=dcell('Put/Call OI',o.put_call_oi_ratio);
+  const idea=o.idea?`<div class="thesis" style="margin-top:10px">${esc(o.idea)}</div>`:'';
+  return `<div class="block"><h2>Options &amp; volatility · ${esc(o.vol_call||'')}</h2>${dgrid(cells)}${idea}</div>`;}
+function valRelBlock(r){const v=r._valuation_relative;if(!v)return '';
+  const cheap=v.ratio<0.85,rich=v.ratio>1.15;
+  const tone=cheap?'up':(rich?'dn':'');
+  const lab=cheap?'cheap vs peers':(rich?'rich vs peers':'in line with peers');
+  return `<div class="block"><h2>Valuation vs scan peers</h2>${dgrid(
+    dcell('P/E',v.pe)+dcell('Peer median P/E',v.peer_median_pe)+
+    dcell('Relative',`<span class="${tone}">${v.ratio}× · ${lab}</span>`))}</div>`;}
+function chk(v){return v?'<span class="up">✓</span>':'<span class="dn">✗</span>';}
+function frameworksBlock(r){const f=r._frameworks;if(!f)return '';
+  const pio=f.piotroski||{},gr=f.graham||{},gb=f.greenblatt||{};
+  let cells='';
+  if(typeof f.framework_score==='number')cells+=dcell('Framework score',f.framework_score.toFixed(0)+'/100');
+  if(pio.max)cells+=dcell('Piotroski F',pio.score+'/'+pio.max);
+  if(gr.total)cells+=dcell('Graham',gr.passed+'/'+gr.total);
+  if(gb.earnings_yield!=null)cells+=dcell('Earnings yield',(gb.earnings_yield*100).toFixed(1)+'%');
+  if(gb.roc!=null)cells+=dcell('Return on capital',(gb.roc*100).toFixed(1)+'%');
+  const list=(label,obj)=>{const ks=Object.keys(obj||{});if(!ks.length)return '';
+    return `<div style="margin-top:10px"><div class="k" style="margin-bottom:4px">${label}</div>`+
+      ks.map(k=>`<span style="display:inline-block;margin:2px 10px 2px 0;font-size:12px">${chk(obj[k])} ${esc(k)}</span>`).join('')+`</div>`;};
+  const detail=list('Piotroski checks',pio.checks)+list('Graham checks',gr.checks);
+  const note=gb.approximate?'<div style="color:var(--faint);font-size:11px;margin-top:8px">Greenblatt earnings-yield / ROC are snapshot approximations.</div>':'';
+  return `<div class="block"><h2>Value frameworks · Piotroski · Greenblatt · Graham</h2>${dgrid(cells)}${detail}${note}</div>`;}
 function renderHeader(){
   $('b-time').textContent=(DATA.generated_at||'').replace('T',' ').slice(0,16)+' UTC';
   const m=DATA.macro||{},ks=Object.keys(m);
-  $('macro').innerHTML=ks.length?ks.map(k=>`${esc(k)} <b>${esc(m[k])}</b>`).join('&nbsp;&nbsp;'):'';
+  const rg=DATA.regime||{};
+  const rgtxt=rg.regime?`<b class="${rg.regime==='risk_on'?'up':(rg.regime==='risk_off'?'dn':'')}">${esc(rg.regime.replace('_',' '))}</b> · ${esc(rg.tilt||'')}`:'';
+  $('macro').innerHTML=[rgtxt,ks.length?ks.map(k=>`${esc(k)} <b>${esc(m[k])}</b>`).join('&nbsp;&nbsp;'):''].filter(Boolean).join('&nbsp;&nbsp;|&nbsp;&nbsp;');
   const bs=DATA.benchmarks||[];
   $('bench').innerHTML=bs.length?'Benchmarks '+bs.map(b=>`${esc(b.symbol)} <b class="${(b.expected_return_pct||0)>=0?'up':'dn'}">${rawPct(b.expected_return_pct)}</b>`).join('&nbsp;&nbsp;'):'';
   const fc=DATA.forecast_config||{};
@@ -585,23 +708,47 @@ async function pushToAlice(){
     if(r.ok)toast('Sent '+it.symbol+' to OpenAlice Inbox');else toast('OpenAlice push failed');}
   catch(e){toast('OpenAlice push failed: '+e.message)}
 }
+function fmtPct(v){return typeof v==='number'?`<span class="${v>=0?'up':'dn'}">${v>=0?'+':''}${v.toFixed(1)}%</span>`:'<span style="color:var(--faint)">—</span>';}
+function fmtMoney(v){return typeof v==='number'?`<span class="${v>=0?'up':'dn'}">${v>=0?'+$':'-$'}${Math.abs(v).toFixed(0)}</span>`:'';}
+const _today=()=>new Date().toISOString().slice(0,10);
 async function showPortfolio(){
-  let pf=[];try{pf=(await(await fetch('/api/portfolio')).json()).portfolio||[];}catch(e){}
   document.querySelectorAll('.row').forEach(r=>r.classList.remove('on'));
-  if(!pf.length){
-    $('report').innerHTML=`<div class="empty"><div class="big">Your portfolio is empty</div>
-      <div class="hint">Open any pick and press <b>＋ Portfolio</b> to track it. Vigil will forecast your holdings and warn you on sell signals.</div></div>`;
-    return;
+  let perf={positions:[],aggregate:{},benchmark:null};
+  try{perf=await(await fetch('/api/portfolio/performance')).json();}catch(e){}
+  const pos=perf.positions||[], ag=perf.aggregate||{}, bn=perf.benchmark;
+  const form=`<div class="pfadd">
+    <input id="pf-sym" placeholder="Symbol">
+    <input id="pf-price" type="number" step="any" placeholder="Entry $">
+    <input id="pf-qty" type="number" step="any" placeholder="Qty (opt)">
+    <input id="pf-date" type="date" value="${_today()}">
+    <button class="pfbtn" onclick="addPosition()">Add position</button></div>`;
+  let head=`<div class="fadein"><div class="kicker">Paper portfolio · ${pos.length} holdings · your benchmark</div>
+    <div class="rhd"><h1>Portfolio</h1><span class="co">your paper-trading book</span></div>`;
+  if(pos.length){
+    head+=`<div class="rsub" style="border-bottom:2px solid var(--ink-strong);padding-bottom:14px">
+      <span class="pfstat">Avg return <b>${typeof ag.avg_return_pct==='number'?(ag.avg_return_pct>=0?'+':'')+ag.avg_return_pct.toFixed(1)+'%':'—'}</b></span>
+      <span class="pfstat">Win rate <b>${ag.win_rate!=null?(ag.win_rate*100).toFixed(0)+'%':'—'}</b> ${ag.winners||0}W/${ag.losers||0}L</span>
+      ${ag.total_return_pct!=null?`<span class="pfstat">Book <b>${(ag.total_return_pct>=0?'+':'')+ag.total_return_pct.toFixed(1)}%</b> (${fmtMoney(ag.total_pnl)})</span>`:''}
+      ${bn?`<span class="pfstat">vs ${esc(bn.symbol)} ${fmtPct(bn.return_pct)} → alpha ${fmtPct(bn.alpha_pct)}</span>`:''}</div>`;
+  } else {
+    head+=`<div class="rsub">Add a position with your own entry price below — Vigil tracks it as a paper trade, forecasts it each scan, and warns on sell signals.</div>`;
   }
-  let h=`<div class="fadein"><div class="kicker">Holdings · ${pf.length}</div>
-    <div class="rhd"><h1>Portfolio</h1><span class="co">your tracked positions</span></div>
-    <div class="rsub">Vigil forecasts these on every scan and via the signals job.</div>`;
-  pf.forEach(p=>{ h+=`<div class="pfrow">
-    <div><div class="sym">${esc(p.symbol)}</div><div class="meta">${esc(p.name||'')}${p.entry_price?' · entry '+esc(p.entry_price):''} · added ${esc((p.added_at||'').slice(0,10))}</div></div>
-    <div class="fc">${esc(p.asset_class||'equity')}</div>
+  let rows='';
+  pos.forEach(p=>{ rows+=`<div class="pfrow">
+    <div><div class="sym">${esc(p.symbol)} &nbsp;${fmtPct(p.return_pct)}</div>
+      <div class="meta">${esc(p.name||'')} · entry ${p.entry_price!=null?'$'+p.entry_price:'—'}${p.qty?' x'+p.qty:''}${p.current_price!=null?' · now $'+p.current_price:''}${p.days_held!=null?' · '+p.days_held+'d':''}</div></div>
+    <div class="fc">${p.pnl!=null?fmtMoney(p.pnl):esc(p.asset_class||'')}</div>
     <button class="pfx" onclick="removeHolding('${esc(p.symbol)}')">✕</button></div>`; });
-  h+=`<button class="pfbtn" onclick="checkSells()">Check for sell signals</button></div>`;
-  $('report').innerHTML=h;
+  const actions=pos.length?`<button class="pfbtn" onclick="checkSells()">Check for sell signals</button>`:'';
+  $('report').innerHTML=head+form+rows+actions+`</div>`;
+}
+async function addPosition(){
+  const sym=($('pf-sym').value||'').trim(); if(!sym){toast('Enter a symbol');return;}
+  const body={symbol:sym, entry_price:parseFloat($('pf-price').value)||null,
+    qty:parseFloat($('pf-qty').value)||null, entry_date:$('pf-date').value||''};
+  try{const r=await fetch('/api/portfolio/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.ok){toast('Added '+sym.toUpperCase());showPortfolio();}else toast('Add failed: HTTP '+r.status);}
+  catch(e){toast('Add failed: '+e.message)}
 }
 async function removeHolding(sym){
   try{await fetch('/api/portfolio/remove?symbol='+encodeURIComponent(sym),{method:'POST'});showPortfolio();}catch(e){}

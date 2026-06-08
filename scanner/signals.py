@@ -144,21 +144,46 @@ async def portfolio_sell_check() -> None:
         if fc and (fc.get("expected_return_pct") or 0) < 0:
             sells.append((h, fc))
 
+    # TA position-management alerts: trailing-stop breach or target reached.
+    from scanner import entry_exit
+    ohlcv_by = {it["symbol"]: it["ohlcv"] for it in items}
+    ta_alerts = []
+    for h in holdings:
+        rows = ohlcv_by.get(h["symbol"])
+        if not rows:
+            continue
+        ta = entry_exit.analyze(rows)
+        price = rows[-1].get("close")
+        ts, tgt = ta.get("trail_stop"), ta.get("target_value")
+        if not isinstance(price, (int, float)):
+            continue
+        if isinstance(ts, (int, float)) and price <= ts:
+            ta_alerts.append((h, f"trailing stop {ts:.2f} breached (px {price:.2f})"))
+        elif isinstance(tgt, (int, float)) and price >= tgt:
+            ta_alerts.append((h, f"target {tgt:.2f} reached (px {price:.2f}) — consider taking profit"))
+
     from scanner.notify import TelegramNotifier, _esc
     notifier = TelegramNotifier()
-    if not sells:
-        logger.info("Portfolio: no sell signals")
+    if not sells and not ta_alerts:
+        logger.info("Portfolio: no sell or position-level signals")
         return
-    lines = ["⚠️ <b>VIGIL — portfolio sell signals</b>", ""]
-    for h, fc in sells:
-        exp = fc.get("expected_return_pct")
-        prob = fc.get("prob_up")
-        prob_s = f" · P↑{prob*100:.0f}%" if isinstance(prob, (int, float)) else ""
-        lines.append(f"<b>{_esc(h['symbol'])}</b> {exp:+.1f}%{prob_s}  (Kronos turned negative)")
-    msg = "\n".join(lines)
+    lines = ["⚠️ <b>VIGIL — portfolio alerts</b>", ""]
+    if sells:
+        lines.append("<b>Kronos sell signals</b>")
+        for h, fc in sells:
+            exp = fc.get("expected_return_pct")
+            prob = fc.get("prob_up")
+            prob_s = f" · P↑{prob*100:.0f}%" if isinstance(prob, (int, float)) else ""
+            lines.append(f"<b>{_esc(h['symbol'])}</b> {exp:+.1f}%{prob_s}  (forecast negative)")
+        lines.append("")
+    if ta_alerts:
+        lines.append("<b>Position levels</b>")
+        for h, txt in ta_alerts:
+            lines.append(f"<b>{_esc(h['symbol'])}</b> — {_esc(txt)}")
+    msg = "\n".join(lines).strip()
     if notifier.enabled:
         await notifier.send(msg)
-        logger.info("Portfolio sell signals sent (%d)", len(sells))
+        logger.info("Portfolio alerts sent (%d sells, %d levels)", len(sells), len(ta_alerts))
     else:
         logger.info("Telegram not configured; would send:\n%s", msg)
 

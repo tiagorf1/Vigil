@@ -120,7 +120,8 @@ class KronosForecaster:
             chunk = self.predictor.predict_batch(
                 df_list=df_list[sl], x_timestamp_list=x_ts_list[sl],
                 y_timestamp_list=y_ts_list[sl], pred_len=pred_len,
-                T=1.0, top_p=0.9, sample_count=1, verbose=False)
+                T=self.cfg.kronos_t, top_p=self.cfg.kronos_top_p,
+                sample_count=1, verbose=False)
             preds.extend(chunk)
 
         # Regroup by symbol and summarise.
@@ -148,14 +149,29 @@ class KronosForecaster:
 
         denom = current_close or 1.0
         terminal_ret = closes[:, -1] / denom - 1.0
+        P = closes.shape[1]
+
+        # Multi-horizon probabilities from the SAME path cloud (free). A single
+        # long-horizon prob pins to 0/100 for trending names; reporting 1m/3m and
+        # a blend communicates the real uncertainty and tempers overconfidence.
+        def _horizon(step):
+            idx = min(step, P) - 1
+            rr = closes[:, idx] / denom - 1.0
+            return float((rr > 0).mean()), float(rr.mean()) * 100.0
+        p1, e1 = _horizon(21)    # ~1 month
+        p3, e3 = _horizon(63)    # ~3 months
+        p_term = float((terminal_ret > 0).mean())
+        prob_blend = (p1 + p3 + p_term) / 3.0
+
         mean_close = closes.mean(axis=0)
         mean_high = highs.mean(axis=0)
         mean_low = lows.mean(axis=0)
 
-        # Per-step quantile cone (for the UI fan chart).
-        q05 = np.percentile(closes, 5, axis=0)
+        # Per-step 95% confidence cone (2.5/97.5 pct) for the UI fan chart.
+        # NOTE: field names stay q05/q95 = lower/upper bound (now a 95% CI).
+        q05 = np.percentile(closes, 2.5, axis=0)
         q50 = np.percentile(closes, 50, axis=0)
-        q95 = np.percentile(closes, 95, axis=0)
+        q95 = np.percentile(closes, 97.5, axis=0)
 
         # Forward per-step volatility (median across paths of intra-path log-ret std).
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -175,6 +191,31 @@ class KronosForecaster:
         forecast_high = float(mean_high.max())
         forecast_low = float(mean_low.min())
 
+        # ── rich Kronos features (path-intrinsic; no levels needed) ──
+        ph_max = highs.max(axis=1)            # per-path best high
+        pl_min = lows.min(axis=1)             # per-path worst low
+        mfe = float((ph_max / denom - 1).mean()) * 100      # max favorable excursion
+        mae = float((pl_min / denom - 1).mean()) * 100      # max adverse excursion
+        exp_range = float(((ph_max - pl_min) / denom).mean()) * 100
+        sd_t = float(terminal_ret.std()) or 1e-9
+        skew = float((((terminal_ret - terminal_ret.mean()) / sd_t) ** 3).mean())
+        worst = np.sort(terminal_ret)[:max(1, int(len(terminal_ret) * 0.05))]
+        cvar5 = float(worst.mean()) * 100
+        third = max(1, vols.shape[1] // 3)
+        v_first = float(vols[:, :third].mean()); v_last = float(vols[:, -third:].mean())
+        vol_trend = float((v_last - v_first) / (v_first + 1e-9))
+        features = {
+            "expected_range_pct": round(exp_range, 3),
+            "mae_pct": round(mae, 3),                 # expected worst dip (long)
+            "mfe_pct": round(mfe, 3),                 # expected best pop
+            "skew": round(skew, 3),                   # >0 = fat upside
+            "cvar5_pct": round(cvar5, 3),             # mean of worst 5% outcomes
+            "prob_up_5pct": round(float((terminal_ret > 0.05).mean()), 3),
+            "prob_dn_5pct": round(float((terminal_ret < -0.05).mean()), 3),
+            "vol_trend": round(vol_trend, 3),         # predicted volume slope
+            "ret_vol_ratio": round(float(terminal_ret.mean()) / sd_t, 3),  # Sharpe-like
+        }
+
         return {
             "symbol": symbol,
             "n_paths": int(closes.shape[0]),
@@ -186,10 +227,17 @@ class KronosForecaster:
             "expected_return_pct": round(float(terminal_ret.mean()) * 100, 4),
             "path_spread_pct": round((forecast_high - forecast_low) / denom * 100, 4),
             # ── probabilistic fields ──
-            "prob_up": round(float((terminal_ret > 0).mean()), 4),
-            "ret_q05_pct": round(float(np.percentile(terminal_ret, 5)) * 100, 4),
+            # Headline prob_up is the multi-horizon blend (less overconfident than
+            # a single 90-day terminal). prob_up_terminal keeps the raw value.
+            "prob_up": round(prob_blend, 4),
+            "prob_up_terminal": round(p_term, 4),
+            "prob_up_1m": round(p1, 4),
+            "prob_up_3m": round(p3, 4),
+            "exp_ret_1m_pct": round(e1, 4),
+            "exp_ret_3m_pct": round(e3, 4),
+            "ret_q05_pct": round(float(np.percentile(terminal_ret, 2.5)) * 100, 4),
             "ret_q50_pct": round(float(np.percentile(terminal_ret, 50)) * 100, 4),
-            "ret_q95_pct": round(float(np.percentile(terminal_ret, 95)) * 100, 4),
+            "ret_q95_pct": round(float(np.percentile(terminal_ret, 97.5)) * 100, 4),
             "terminal_vol_pct": round(float(terminal_ret.std()) * 100, 4),
             "step_vol_pct": round(step_vol * 100, 4),
             "cone": {
@@ -197,6 +245,7 @@ class KronosForecaster:
                 "q50": [round(float(x), 6) for x in q50],
                 "q95": [round(float(x), 6) for x in q95],
             },
+            "features": features,
         }
 
     # ── frame helpers ─────────────────────────────────────────────────────

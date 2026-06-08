@@ -55,6 +55,8 @@ class Config:
     # LLM synthesis
     llm_provider: str               # gemini | anthropic | none
     gemini_api_key: str
+    fundamentals_provider: str
+    fmp_api_key: str
     gemini_model: str
     anthropic_api_key: str
     anthropic_model: str
@@ -71,12 +73,15 @@ class Config:
     kronos_repo_path: str
     kronos_sample_count: int
     kronos_mc_paths: int
+    kronos_t: float
+    kronos_top_p: float
     kronos_device: str
     kronos_service_url_override: str
 
     # Scanner behaviour
     default_lookback: int
     default_pred_len: int
+    kronos_horizons: str   # comma list of forecast horizons the system auto-selects from
     max_universe_size: int
     max_index_components_local: int
     max_screened_size: int
@@ -84,6 +89,8 @@ class Config:
 
     # UI
     ui_port: int
+    vigil_worker_url: str   # if set, the local cockpit forwards scans to this cloud worker
+    vigil_worker_token: str # shared secret sent as X-Vigil-Token to the worker
     refresh_on_open: bool
 
     # Telegram signals
@@ -95,6 +102,11 @@ class Config:
 
     # Free OHLCV fallback (Stooq) when OpenAlice has no price history
     use_data_fallback: bool
+
+    # Position sizing
+    account_equity: float          # 0 = unknown -> weights only, no dollar amounts
+    sizing_kelly_fraction: float   # fraction of full Kelly to use (e.g. 0.5 = half-Kelly)
+    sizing_target_vol: float       # annualized portfolio vol target per position
 
     @property
     def telegram_enabled(self) -> bool:
@@ -112,6 +124,16 @@ class Config:
     @property
     def signal_market_list(self) -> list[str]:
         return [m.strip() for m in self.signal_markets.split(",") if m.strip()]
+
+    @property
+    def horizon_list(self) -> list[int]:
+        out = []
+        for h in self.kronos_horizons.split(","):
+            try:
+                out.append(int(h.strip()))
+            except ValueError:
+                continue
+        return out or [10, 30, 60]
 
     @property
     def resolved_anthropic_model(self) -> str:
@@ -150,6 +172,8 @@ def get_config() -> Config:
         project_root=_PROJECT_ROOT,
         llm_provider=_get("LLM_PROVIDER", "gemini").lower() or "gemini",
         gemini_api_key=_get("GEMINI_API_KEY"),
+        fundamentals_provider=_get("FUNDAMENTALS_PROVIDER", "auto") or "auto",
+        fmp_api_key=_get("FMP_API_KEY"),
         gemini_model=_get("GEMINI_MODEL", "gemini-2.5-flash"),
         anthropic_api_key=_get("ANTHROPIC_API_KEY"),
         anthropic_model=_get("ANTHROPIC_MODEL", "claude-opus-4-6"),
@@ -162,15 +186,20 @@ def get_config() -> Config:
         kronos_repo_path=_expand(_get("KRONOS_REPO_PATH", "~/Kronos")),
         kronos_sample_count=_get_int("KRONOS_SAMPLE_COUNT", 3),
         kronos_mc_paths=_get_int("KRONOS_MC_PATHS", 24),
+        kronos_t=float(_get("KRONOS_T", "1.0") or 1.0),
+        kronos_top_p=float(_get("KRONOS_TOP_P", "0.95") or 0.95),
         kronos_device=_get("KRONOS_DEVICE", "auto") or "auto",
         kronos_service_url_override=_get("KRONOS_SERVICE_URL"),
         default_lookback=_get_int("DEFAULT_LOOKBACK", 400),
         default_pred_len=_get_int("DEFAULT_PRED_LEN", 90),
+        kronos_horizons=_get("KRONOS_HORIZONS", "10,30,60") or "10,30,60",
         max_universe_size=_get_int("MAX_UNIVERSE_SIZE", 500),
         max_index_components_local=_get_int("MAX_INDEX_COMPONENTS_LOCAL", 120),
         max_screened_size=_get_int("MAX_SCREENED_SIZE", 30),
         max_watchlist_size=_get_int("MAX_WATCHLIST_SIZE", 10),
         ui_port=_get_int("SCANNER_UI_PORT", 8080),
+        vigil_worker_url=_get("VIGIL_WORKER_URL"),
+        vigil_worker_token=_get("VIGIL_WORKER_TOKEN"),
         refresh_on_open=_get_bool("VIGIL_REFRESH_ON_OPEN", False),
         telegram_bot_token=_get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_get("TELEGRAM_CHAT_ID"),
@@ -178,4 +207,7 @@ def get_config() -> Config:
         signal_min_return=float(_get("SIGNAL_MIN_RETURN", "6") or 6),
         signal_markets=_get("SIGNAL_MARKETS", "world") or "world",
         use_data_fallback=_get_bool("USE_DATA_FALLBACK", True),
+        account_equity=float(_get("VIGIL_ACCOUNT_EQUITY", "0") or 0),
+        sizing_kelly_fraction=float(_get("SIZING_KELLY_FRACTION", "0.5") or 0.5),
+        sizing_target_vol=float(_get("SIZING_TARGET_VOL", "0.15") or 0.15),
     )

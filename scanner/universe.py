@@ -35,6 +35,42 @@ SEED_FOREX = [
     "AUDUSD=X", "NZDUSD=X", "EURJPY=X", "GBPJPY=X", "EURGBP=X",
 ]
 
+# Stablecoins / wrapped / pegged tokens to drop from a "top crypto" universe —
+# forecasting a dollar-pegged coin is pointless.
+_CRYPTO_SKIP = {"USDT", "USDC", "DAI", "BUSD", "TUSD", "USDD", "FDUSD", "PYUSD",
+                "WBTC", "WETH", "STETH", "WSTETH", "WEETH", "USDE"}
+
+
+async def coingecko_top(n: int = 20) -> list[str]:
+    """Top-N crypto by market cap from the free, keyless CoinGecko API.
+
+    Returns our `<SYMBOL>USD` convention (e.g. BTCUSD), stablecoins/wrapped
+    tokens removed. Falls back to the seed majors on any failure."""
+    import httpx
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "usd", "order": "market_cap_desc",
+              "per_page": min(max(n * 2, 10), 250), "page": 1, "sparkline": "false"}
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "Vigil/1.0"}) as c:
+            r = await c.get(url, params=params)
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        out: list[str] = []
+        for coin in r.json():
+            sym = (coin.get("symbol") or "").upper()
+            if not sym or sym in _CRYPTO_SKIP:
+                continue
+            out.append(f"{sym}USD")
+            if len(out) >= n:
+                break
+        if out:
+            logger.info("CoinGecko top-%d crypto: %s...", len(out), ", ".join(out[:6]))
+            return out
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("CoinGecko top-N failed (%s); using seed majors", exc)
+    return list(SEED_CRYPTO)
+
+
 _CRYPTO_HINTS = {"crypto", "bitcoin", "ethereum", "token", "coin", "defi", "altcoin"}
 _COMMODITY_HINTS = {"commodity", "commodities", "futures", "gold", "oil", "metals", "energy"}
 _FOREX_HINTS = {"forex", "fx", "currency", "currencies", "eurusd", "usdjpy"}
@@ -79,6 +115,20 @@ class UniverseBuilder:
             logger.warning("Index expansion failed for '%s'; falling back to broad equities",
                            directive)
             return self._seed_universe("equity")[: self.cfg.max_universe_size]
+
+        # Crypto: a broad / "top N" directive pulls the live top-N by market cap
+        # from free CoinGecko, so the universe tracks the real market, not a
+        # hardcoded list. Explicit tickers still take the path below.
+        if asset_class == "crypto":
+            low = directive.lower()
+            wants_top = (not directive) or any(
+                w in low for w in ("top", "broad", "market", "majors", "largest"))
+            if wants_top and not self._extract_explicit_symbols(directive):
+                import re as _re
+                msize = _re.search(r"top\s*(\d+)", low)
+                n = int(msize.group(1)) if msize else 20
+                n = min(n, self.cfg.max_universe_size)
+                return (await coingecko_top(n))[: self.cfg.max_universe_size]
 
         if not directive:
             symbols = self._seed_universe(asset_class)

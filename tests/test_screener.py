@@ -37,6 +37,15 @@ class FakeClient:
     async def get_insider_trading(self, s): return self._insider
 
 
+@pytest.fixture(autouse=True)
+def _no_network_fundamentals(monkeypatch):
+    """Force the OpenAlice fallback path so screener tests never hit Yahoo."""
+    async def _f(symbol, use_cache=True):
+        return {}
+    import scanner.fundamentals as F
+    monkeypatch.setattr(F, "fetch", _f)
+
+
 def test_helpers():
     assert _num({"pe": "18.5"}, "pe") == 18.5
     assert _num({}, "pe") is None
@@ -44,7 +53,14 @@ def test_helpers():
 
 
 @pytest.mark.asyncio
-async def test_equity_fundamentals_full_score():
+async def test_equity_fundamentals_full_score(monkeypatch):
+    # Force the OpenAlice fallback path (no network): real fundamentals provider
+    # returns nothing, so the screener scores from the mocked OpenAlice fields.
+    async def _no_yahoo(symbol, use_cache=True):
+        return {}
+    import scanner.fundamentals as F
+    monkeypatch.setattr(F, "fetch", _no_yahoo)
+
     client = FakeClient(
         ohlcv=_series(),
         profile={"companyName": "Test Co", "sector": "Technology"},
