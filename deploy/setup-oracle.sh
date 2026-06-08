@@ -36,7 +36,9 @@ sed -i 's/^KRONOS_DEVICE=.*/KRONOS_DEVICE=cpu/' .env
 sed -i 's/^VIGIL_START_OPENALICE=.*/VIGIL_START_OPENALICE=false/' .env
 grep -q '^KRONOS_MODEL=' .env && sed -i 's#^KRONOS_MODEL=.*#KRONOS_MODEL=NeoQuasar/Kronos-base#' .env
 
-CURTOK="$(grep '^VIGIL_WORKER_TOKEN=' .env | head -1 | cut -d= -f2 | tr -d ' ' || true)"
+# Read any existing token, stripping an inline "# comment" so the template's
+# explanatory comment is never mistaken for a real token.
+CURTOK="$(grep '^VIGIL_WORKER_TOKEN=' .env | head -1 | sed 's/^VIGIL_WORKER_TOKEN=//; s/#.*//' | tr -d ' ' || true)"
 if [ -z "$CURTOK" ]; then
   TOKEN="$(openssl rand -hex 24)"
   sed -i "s|^VIGIL_WORKER_TOKEN=.*|VIGIL_WORKER_TOKEN=$TOKEN|" .env
