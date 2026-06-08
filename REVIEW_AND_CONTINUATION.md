@@ -28,7 +28,7 @@ New asset classes: `etf`, `commodity`, `forex` added alongside equity/index/cryp
   `VIGIL_REFRESH_ON_OPEN`. Telegram token + chat id now set. `SIGNAL_MARKETS=global-liquid`.
 
 ## B. Changes made THIS pass (surgical, to avoid clobbering active work)
-1. Gemini API key rotated in `.env` (new key AQ.Ab8RN6JXjt65...).
+1. Gemini API key rotated in `.env` (stored locally, never committed).
 2. **95% confidence interval** on forecasts:
    - `kronos_service/predictor.py`: cone + terminal-return percentiles changed
      5/95 -> 2.5/97.5 (now a true 95% CI). Field names q05/q95 kept = lower/upper.
