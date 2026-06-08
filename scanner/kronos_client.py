@@ -116,7 +116,7 @@ class KronosClient:
         }
         try:
             t0 = time.time()
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=self.cfg.kronos_http_timeout) as client:
                 r = await client.post(f"{self.base_url}/forecast", json=payload)
             if r.status_code != 200:
                 logger.warning("%s: forecast HTTP %d — %s",
@@ -151,7 +151,7 @@ class KronosClient:
         }
         try:
             t0 = time.time()
-            async with httpx.AsyncClient(timeout=600.0) as client:
+            async with httpx.AsyncClient(timeout=self.cfg.kronos_http_timeout) as client:
                 r = await client.post(f"{self.base_url}/forecast_batch", json=payload)
             if r.status_code != 200:
                 logger.warning("batch forecast HTTP %d — %s", r.status_code, r.text[:200])
