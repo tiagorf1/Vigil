@@ -142,6 +142,12 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         if not universe:
             status("No symbols in universe. Stopping.")
             return None
+        # Single-asset deep-dive: searching ONE name runs it at full tilt (max
+        # Monte-Carlo paths). It is only one symbol, so the extra precision is cheap
+        # and you get the most reliable read on a name you specifically asked about.
+        if len(universe) == 1:
+            mc_paths = max(mc_paths, 24)
+            status(f"      Single-asset deep-dive — full tilt ({mc_paths} paths, all horizons)")
         requested_asset_class = args.asset_class
         asset_class = args.asset_class or ("crypto" if _looks_crypto(universe) else "equity")
         benchmark_symbols: list[str] = []
