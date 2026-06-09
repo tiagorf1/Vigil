@@ -23,6 +23,7 @@ from functools import lru_cache
 from scanner.config import get_config
 
 _Z95 = 1.96
+_MIN_SAMPLE_BACKED_N = 30
 
 
 def _clamp_prob(p):
@@ -56,7 +57,7 @@ def _load() -> dict:
     path = get_config().project_root / "outputs" / "forecast_calibration.json"
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            return _merge_with_defaults(json.loads(path.read_text()))
         except Exception:  # noqa: BLE001
             pass
     return _DEFAULT_CALIBRATION
@@ -70,7 +71,8 @@ def _lookup(cal: dict, asset_class: str, horizon: int) -> dict | None:
     bucket = cal.get(asset_class)
     if not bucket:
         # fall back to any class average
-        allf = [v for b in cal.values() for v in b.values()]
+        allf = [_usable_or_default(v, None) for b in cal.values() for v in b.values()]
+        allf = [v for v in allf if v]
         if not allf:
             return None
         return {"add_pct": sum(f["add_pct"] for f in allf) / len(allf),
@@ -79,7 +81,9 @@ def _lookup(cal: dict, asset_class: str, horizon: int) -> dict | None:
                 "n": sum(f.get("n", 0) for f in allf)}
     # nearest horizon
     hs = sorted(bucket.keys(), key=lambda h: abs(int(h) - horizon))
-    return bucket[hs[0]]
+    factors = bucket[hs[0]]
+    default = _nearest_default(asset_class, horizon)
+    return _usable_or_default(factors, default)
 
 
 def apply(fc: dict, asset_class: str, horizon: int) -> dict:
@@ -143,7 +147,11 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
 
     fc["calibrated"] = True
     fc["calibration_n"] = factors.get("n")
-    fc["calibration_generation"] = "sample_backed" if (factors.get("n") or 0) > 0 else "default_prior"
+    fc["calibration_generation"] = factors.get("quality") or (
+        "sample_backed" if (factors.get("n") or 0) >= _MIN_SAMPLE_BACKED_N else "default_prior")
+    if factors.get("ignored_n") is not None:
+        fc["ignored_calibration_n"] = factors.get("ignored_n")
+        fc["ignored_calibration_reason"] = factors.get("ignored_reason")
     return fc
 
 
@@ -153,3 +161,43 @@ def _clamp_shrink(value) -> float:
     except (TypeError, ValueError):
         return 1.0
     return round(min(1.0, max(0.05, v)), 4)
+
+
+def _merge_with_defaults(user_cal: dict) -> dict:
+    """Keep file-backed buckets, but make defaults available as fallbacks."""
+    merged = {ac: dict(hs) for ac, hs in _DEFAULT_CALIBRATION.items()}
+    if not isinstance(user_cal, dict):
+        return merged
+    for ac, bucket in user_cal.items():
+        if isinstance(bucket, dict):
+            merged.setdefault(ac, {}).update(bucket)
+    return merged
+
+
+def _nearest_default(asset_class: str, horizon: int) -> dict | None:
+    bucket = _DEFAULT_CALIBRATION.get(asset_class)
+    if not bucket:
+        return None
+    hs = sorted(bucket.keys(), key=lambda h: abs(int(h) - horizon))
+    return dict(bucket[hs[0]])
+
+
+def _usable_or_default(factors: dict | None, default: dict | None) -> dict | None:
+    if not factors:
+        return default
+    n = int(factors.get("n") or 0)
+    if n == 0:
+        out = dict(factors)
+        out.setdefault("quality", "default_prior")
+        return out
+    if n >= _MIN_SAMPLE_BACKED_N:
+        out = dict(factors)
+        out["quality"] = "sample_backed"
+        return out
+    if default:
+        out = dict(default)
+        out["quality"] = "default_prior_low_sample_fallback"
+        out["ignored_n"] = n
+        out["ignored_reason"] = f"sample-backed calibration requires n>={_MIN_SAMPLE_BACKED_N}"
+        return out
+    return None

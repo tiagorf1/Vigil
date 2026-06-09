@@ -45,6 +45,7 @@ DEFAULT_SYMBOLS = [
     "BTCUSD", "ETHUSD",                                          # crypto
     "GLD", "EURUSD=X",                                           # commodity, FX
 ]
+MIN_SAMPLE_BACKED_N = 30
 
 
 def asset_class_of(symbol: str) -> str:
@@ -156,6 +157,7 @@ def _aggregate(records: dict, cfg) -> dict:
 
         scorecard[f"{ac}@{H}"] = {
             "n": n,
+            "quality": "sample_backed" if n >= MIN_SAMPLE_BACKED_N else "low_sample_report_only",
             "bias_pct": round(bias * 100, 2),
             "mae_pct": round(mae * 100, 2),
             "hit_rate_raw": round(hit_raw, 3),
@@ -173,6 +175,7 @@ def _aggregate(records: dict, cfg) -> dict:
             "r2": round(r2, 4) if r2 is not None else None,
             "ci95_halfwidth_pct": round(z95 * sigma * 100, 4),
             "n": n,
+            "quality": "sample_backed" if n >= MIN_SAMPLE_BACKED_N else "low_sample_report_only",
         }
         overall["n"] += n
         overall["hit"] += hit_deb * n
