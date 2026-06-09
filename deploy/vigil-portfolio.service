@@ -1,0 +1,10 @@
+[Unit]
+Description=Vigil portfolio guard (forecast holdings -> Telegram sell alerts)
+After=network-online.target
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__/Vigil
+Environment=KRONOS_REPO_PATH=__HOME__/Kronos
+Environment=KRONOS_DEVICE=cpu
+ExecStart=__HOME__/Vigil/.venv/bin/python -m scanner.signals portfolio

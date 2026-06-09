@@ -51,6 +51,8 @@ sudo cp deploy/vigil-worker.service /etc/systemd/system/
 sudo cp deploy/vigil-bot.service /etc/systemd/system/
 sudo cp deploy/vigil-signals.service /etc/systemd/system/
 sudo cp deploy/vigil-signals.timer /etc/systemd/system/
+sudo cp deploy/vigil-portfolio.service /etc/systemd/system/
+sudo cp deploy/vigil-portfolio.timer /etc/systemd/system/
 sudo sed -i "s#__HOME__#$HOME#g; s#__USER__#$USER#g" /etc/systemd/system/vigil-*.service
 sudo systemctl daemon-reload
 # Start ONLY the worker now. The Telegram bot needs your token in .env first, so
@@ -79,8 +81,11 @@ NEXT — fill your secrets:
     TELEGRAM_CHAT_ID=...         (optional)
   then:
     sudo systemctl restart vigil-worker
-    sudo systemctl enable --now vigil-bot              # Telegram command bot (needs token)
-    sudo systemctl enable --now vigil-signals.timer    # 24/7 watcher: scheduled markets+portfolio -> Telegram
+    sudo systemctl enable --now vigil-bot                 # Telegram command bot (needs token)
+    sudo systemctl enable --now vigil-signals.timer       # pre-market market sweep (05:00 London)
+    sudo systemctl enable --now vigil-portfolio.timer     # portfolio guard (midday/afternoon)
+  recommended:  set  SIGNAL_MARKETS=europe,global-liquid  in .env (markets only;
+                portfolio has its own timer)
 
 ON YOUR MAC — point the cockpit at this box (~/Scanner Project/.env):
     VIGIL_WORKER_URL=http://$PUBIP:8090
