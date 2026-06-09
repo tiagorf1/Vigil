@@ -99,3 +99,22 @@ async def test_crypto_momentum_score():
     c = (await Screener(client).screen(["BTCUSD"], asset_class="crypto"))[0]
     # 25 free + 25 (30d up) + 25 (7d up) + 25 (vol spike) = 100
     assert c.fund_score == 100.0
+
+
+def test_short_combined_rewards_weak_fundamentals():
+    from scanner.screener import Candidate
+    c = Candidate(symbol="X")
+    c.fund_score = 20; c.tech_score = 10; c.tech_short_score = 60
+    # Short case: (100-20) + 60 = 140, beats the long case 30.
+    assert c.short_combined > c.combined
+    assert c.best_combined == c.short_combined
+    assert c.passed              # short path: (100-20)>=40 and 60>=45
+
+
+def test_strong_fundamentals_do_not_pass_as_short():
+    from scanner.screener import Candidate
+    c = Candidate(symbol="Y")
+    c.fund_score = 90; c.tech_score = 80; c.tech_short_score = 10
+    # Quality name: long case passes, short case does not.
+    assert c.passed
+    assert c.combined > c.short_combined

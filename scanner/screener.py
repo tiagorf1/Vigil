@@ -43,14 +43,28 @@ class Candidate:
     sector: str = ""
     fundamentals: dict = field(default_factory=dict)
     fund_breakdown: dict = field(default_factory=dict)
+    tech_short_score: float = 0.0   # bearish technical setup (short candidate)
 
     @property
     def combined(self) -> float:
         return self.fund_score + self.tech_score
 
     @property
+    def short_combined(self) -> float:
+        # A good SHORT candidate has WEAK fundamentals + bearish technicals.
+        return (100.0 - self.fund_score) + self.tech_short_score
+
+    @property
+    def best_combined(self) -> float:
+        """Selection score: the better of the long and short cases, so a strong
+        short candidate makes the cut even if its long case is poor."""
+        return max(self.combined, self.short_combined)
+
+    @property
     def passed(self) -> bool:
-        return self.fund_score >= FUND_THRESHOLD and self.tech_score >= TECH_THRESHOLD
+        long_ok = self.fund_score >= FUND_THRESHOLD and self.tech_score >= TECH_THRESHOLD
+        short_ok = (100.0 - self.fund_score) >= FUND_THRESHOLD and self.tech_short_score >= TECH_THRESHOLD
+        return long_ok or short_ok
 
 
 class Screener:
@@ -79,9 +93,10 @@ class Screener:
             logger.warning("Only %d cleared both screens — lenient ranking of all %d",
                            len(passed), len(candidates))
 
-        pool.sort(key=lambda c: c.combined, reverse=True)
+        pool.sort(key=lambda c: c.best_combined, reverse=True)
         survivors = pool[: self.cfg.max_screened_size]
-        logger.info("Screener survivors: %d", len(survivors))
+        n_short = sum(1 for c in survivors if c.short_combined > c.combined)
+        logger.info("Screener survivors: %d (%d lean short)", len(survivors), n_short)
         return survivors
 
     async def _screen_one(self, symbol: str, asset_class: str) -> Candidate | None:
@@ -197,6 +212,26 @@ class Screener:
             if band > 0 and (price - bb_l) / band < 0.25:
                 score += 20
         c.tech_score = min(score, 100.0)
+
+        # Bearish/short technical score — the mirror image (downtrend, weak
+        # momentum, overbought, near the upper band).
+        s = 0.0
+        if rsi is not None:
+            if 50 <= rsi <= 70:
+                s += 20          # room to fall
+            elif rsi > 70:
+                s += 15          # overbought
+        if hist is not None and hist < 0 and (hist_prev is None or hist < hist_prev):
+            s += 20
+        if price is not None and sma50 is not None and price < sma50:
+            s += 15
+        if price is not None and sma200 is not None and price < sma200:
+            s += 10
+        if price is not None and bb_l is not None and bb_u is not None:
+            band = bb_u - bb_l
+            if band > 0 and (bb_u - price) / band < 0.25:
+                s += 20          # near upper band — mean-reversion short
+        c.tech_short_score = min(s, 100.0)
 
 
 # ── fundamental dict extraction helpers ────────────────────────────────────
