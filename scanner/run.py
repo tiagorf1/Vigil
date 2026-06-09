@@ -118,7 +118,10 @@ async def _openalice_reachable(mcp_url: str, timeout: float = 5.0) -> bool:
 async def run_scan(args: argparse.Namespace) -> str | None:
     cfg = get_config()
     directive = args.directive.strip()
-    pred_len = _positive_int(getattr(args, "pred_len", None), cfg.default_pred_len)
+    # The horizon set is the source of truth; the single 'pred_len' is now only a
+    # fallback/secondary horizon and defaults to the LONGEST configured horizon
+    # (not the legacy 90), so no stray 90-day number leaks into labels or forecasts.
+    pred_len = _positive_int(getattr(args, "pred_len", None), max(cfg.horizon_list))
     mc_paths = _positive_int(getattr(args, "mc_paths", None), cfg.kronos_mc_paths)
 
     symbols_from_file: list[str] = []
@@ -201,7 +204,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
 
         # ── [4/6] Kronos batched forecasts (reuse screener's OHLCV) ────────
         status(f"[4/6] Kronos forecasting {len(survivors)} names "
-               f"(batched, {pred_len}d / {mc_paths} paths)...")
+               f"(auto-horizons {'/'.join(str(h) for h in cfg.horizon_list)}d, {mc_paths} paths)...")
         warning = _local_load_warning(cfg, len(survivors), pred_len, mc_paths)
         if warning:
             status("      " + warning)
@@ -404,6 +407,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             exits=exits, benchmarks=benchmark_forecasts)
         watchlist["forecast_config"] = {
             "pred_len": pred_len,
+            "horizons": cfg.horizon_list,
             "mc_paths": mc_paths,
             "lookback": cfg.default_lookback,
             "model": cfg.kronos_model,

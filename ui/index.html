@@ -607,7 +607,7 @@ function renderHeader(){
   const bs=DATA.benchmarks||[];
   $('bench').innerHTML=bs.length?'Benchmarks '+bs.map(b=>`${esc(b.symbol)} <b class="${(b.expected_return_pct||0)>=0?'up':'dn'}">${rawPct(b.expected_return_pct)}</b>`).join('&nbsp;&nbsp;'):'';
   const fc=DATA.forecast_config||{};
-  const ftxt=fc.pred_len?` · ${fc.pred_len}d/${fc.mc_paths||'—'}p`:'';
+  const ftxt=fc.horizons&&fc.horizons.length?` · ${fc.horizons.join('/')}d/${fc.mc_paths||'—'}p`:(fc.pred_len?` · ${fc.pred_len}d/${fc.mc_paths||'—'}p`:'');
   $('prov-pill').textContent='synth: '+(DATA.provider||'—')+ftxt;
 }
 function renderAll(){
