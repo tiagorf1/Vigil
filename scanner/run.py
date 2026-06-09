@@ -225,9 +225,47 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         horizons = cfg.horizon_list
         survivor_items = [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in survivors]
         forecasts_by_h: dict[int, dict] = {}
-        for h in horizons:
-            forecasts_by_h[h] = await kronos.forecast_batch(
-                survivor_items, pred_len=h, n_paths=mc_paths)
+
+        # Two-stage forecasting: when there are many survivors, sweep them all at
+        # LOW paths, keep a generous buffer of the highest-edge names, then refine
+        # ONLY that buffer at full paths. Heavy compute is spent on contenders, not
+        # on names that are clearly not in the running. The buffer (2x the final
+        # list) is wide, so only clearly-weak names are dropped on the cheap pass.
+        refine_n = max(2 * cfg.max_watchlist_size, 12)
+        screen_paths = cfg.kronos_screen_paths
+        if len(survivors) > refine_n and 0 < screen_paths < mc_paths:
+            status(f"      Stage 1/2: screening {len(survivors)} names at "
+                   f"{screen_paths} paths...")
+            stage1: dict[int, dict] = {}
+            for h in horizons:
+                stage1[h] = await kronos.forecast_batch(
+                    survivor_items, pred_len=h, n_paths=screen_paths)
+
+            def _edge(sym: str) -> float:
+                best = 0.0
+                for h in horizons:
+                    fc = stage1.get(h, {}).get(sym)
+                    if not fc:
+                        continue
+                    pu = fc.get("prob_up")
+                    er = fc.get("expected_return_pct")
+                    conf = abs((pu if isinstance(pu, (int, float)) else 0.5) - 0.5) * 2
+                    best = max(best, conf * abs(er if isinstance(er, (int, float)) else 0.0))
+                return best
+
+            ranked = sorted(survivors, key=lambda c: _edge(c.symbol), reverse=True)
+            refine = ranked[:refine_n]
+            status(f"      Stage 2/2: refining top {len(refine)} at {mc_paths} paths "
+                   f"({len(survivors) - len(refine)} dropped)...")
+            refine_items = [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in refine]
+            for h in horizons:
+                forecasts_by_h[h] = await kronos.forecast_batch(
+                    refine_items, pred_len=h, n_paths=mc_paths)
+            survivors = refine
+        else:
+            for h in horizons:
+                forecasts_by_h[h] = await kronos.forecast_batch(
+                    survivor_items, pred_len=h, n_paths=mc_paths)
         forecasts = forecasts_by_h[max(horizons)]  # default for holdings/exits
 
         benchmark_forecasts: list[dict] = []

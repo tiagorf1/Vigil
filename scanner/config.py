@@ -78,6 +78,7 @@ class Config:
     kronos_device: str
     kronos_service_url_override: str
     kronos_http_timeout: float
+    kronos_screen_paths: int   # stage-1 low-path sweep before refining the buffer
 
     # Scanner behaviour
     default_lookback: int
@@ -192,6 +193,7 @@ def get_config() -> Config:
         kronos_device=_get("KRONOS_DEVICE", "auto") or "auto",
         kronos_service_url_override=_get("KRONOS_SERVICE_URL"),
         kronos_http_timeout=float(_get("KRONOS_HTTP_TIMEOUT", "1800") or 1800),
+        kronos_screen_paths=_get_int("KRONOS_SCREEN_PATHS", 6),
         default_lookback=_get_int("DEFAULT_LOOKBACK", 400),
         default_pred_len=_get_int("DEFAULT_PRED_LEN", 90),
         kronos_horizons=_get("KRONOS_HORIZONS", "10,30,60") or "10,30,60",
