@@ -525,7 +525,7 @@ function render(it){
   const r=it.report||{},sc=r._scores||{};
   $('report').innerHTML=`<div class="fadein">
    <div class="kicker">${esc((it.direction||'long').toUpperCase())} · ${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · ${esc(PROFILE)} rank ${profileRank(it)||it.rank}</div>
-   <div class="rhd"><h1>${esc(it.symbol)}</h1><span class="co">${esc(it.name||'')}</span>
+   <div class="rhd"><h1>${esc(it.name||it.symbol)}</h1><span class="co">${esc(it.symbol)}</span>
      <span class="spacer" style="flex:1"></span>
      ${API.has?`<button class="addbtn" onclick="addToPortfolio()">＋ Portfolio</button>`:''}
      <span class="badge dir-${esc(it.direction||'long')}">${esc((it.direction||'long').toUpperCase())}</span>
