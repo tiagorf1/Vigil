@@ -380,6 +380,9 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                 tags.append(asset_class)
             if not sel.get("agrees"):
                 tags.append("counter_trend")   # forecast/trade fights the price trend
+                # A counter-trend trade is a reversal bet, never "momentum".
+                if report.get("strategy_type") == "momentum":
+                    report["strategy_type"] = "mean_reversion"
             if cand.profile.get("_dq_flags"):
                 report["_dq_flags"] = cand.profile["_dq_flags"]
                 tags.append("data_warning")

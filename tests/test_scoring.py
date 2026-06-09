@@ -12,7 +12,7 @@ def test_empty_report_scores_zero():
 def test_strong_name_scores_high():
     report = {
         "conviction": 5,
-        "_barrier": {"prob_R": 1.5, "p_target_first": 0.6, "p_stop_first": 0.1},
+        "_barrier": {"expected_r": 1.5, "p_target_first": 0.6, "p_stop_first": 0.1},
         "_meta_prob_up": 0.7,
         "_forecast_agrees": True,
     }
@@ -63,7 +63,7 @@ def test_low_horizon_short_not_punished_for_strong_fundamentals():
     # The user's case: a low-horizon short on a 100-fundamentals name should be
     # scored on technicals+forecast, NOT dragged down by good fundamentals.
     strong_fund_short = {"conviction": 3, "direction": "short", "horizon": "low",
-                         "_barrier": {"prob_R": 0.9, "p_target_first": 0.55, "p_stop_first": 0.2}}
+                         "_barrier": {"expected_r": 0.9, "p_target_first": 0.55, "p_stop_first": 0.2}}
     s_strong, _ = scoring.composite(strong_fund_short, {"prob_up": 0.2}, 100, 50)
     weak_fund_short = dict(strong_fund_short)
     s_weak, _ = scoring.composite(weak_fund_short, {"prob_up": 0.2}, 10, 50)

@@ -1,9 +1,10 @@
 [Unit]
 Description=Vigil pre-market sweep (Europe first, then global/US baskets)
 [Timer]
-# One sweep a day, well before the London open. London tz tracks BST/GMT.
-# Order of markets is set by SIGNAL_MARKETS (recommend: europe,global-liquid).
-OnCalendar=Mon-Fri 05:00 Europe/London
+# One overnight sweep with ~10h runway so it cascades through everything before the
+# 10:00 London review. Order is set by SIGNAL_MARKETS (recommend:
+# europe,crypto,forex,us -> EU indices first, then crypto/FX, then US stocks).
+OnCalendar=Mon-Fri 00:00 Europe/London
 Persistent=true
 [Install]
 WantedBy=timers.target

@@ -27,7 +27,7 @@ def barrier_probabilities(forecast: dict, entry: float, stop: float,
                           target: float, n_sims: int = 3000) -> dict:
     """P(touch target before stop) within the horizon, from the forecast cone."""
     out = {"p_target_first": None, "p_stop_first": None, "p_neither": None,
-           "expected_days_to_target": None, "prob_R": None}
+           "expected_days_to_target": None, "expected_r": None}
     cone = (forecast or {}).get("cone") or {}
     q50 = cone.get("q50"); q05 = cone.get("q05"); q95 = cone.get("q95")
     cur = forecast.get("current_close")
@@ -68,9 +68,10 @@ def barrier_probabilities(forecast: dict, entry: float, stop: float,
         "p_stop_first": round(ps, 3),
         "p_neither": round(1 - pt - ps, 3),
         "expected_days_to_target": round(float(touch_step[hit_t].mean()), 1) if hit_t.any() else None,
-        # Probability-weighted R: (R_target * p_target - 1 * p_stop)
-        "prob_R": round(((target - entry) / max(entry - stop, 1e-9)) * pt - ps, 2) if long
-                  else round(((entry - target) / max(stop - entry, 1e-9)) * pt - ps, 2),
+        # Expected R-multiple (probability-weighted): R_target * p_target - 1 * p_stop.
+        # NOT a probability — can exceed 1. Positive = favourable expectancy.
+        "expected_r": round(((target - entry) / max(entry - stop, 1e-9)) * pt - ps, 2) if long
+                      else round(((entry - target) / max(stop - entry, 1e-9)) * pt - ps, 2),
     })
     return out
 

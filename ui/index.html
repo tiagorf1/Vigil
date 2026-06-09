@@ -149,7 +149,8 @@ main{display:grid;grid-template-columns:minmax(340px,34%) 1fr;flex:1;min-height:
 .row .rk{font-family:var(--serif);font-size:14px;color:var(--faint);font-weight:600}
 .row .tk{font-family:var(--serif);font-weight:700;font-size:19px;letter-spacing:-.01em;color:var(--ink-strong);font-variant-numeric:tabular-nums}
 .row .nm{color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px;font-weight:500}
-.row .st{color:var(--claret);font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-family:var(--sans);font-weight:800;margin-top:2px}
+.row .st{display:flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--claret);font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-family:var(--sans);font-weight:800;margin-top:5px}
+.row .st .hbadge{margin-left:0}
 .row .rt{text-align:right;font-family:var(--sans);font-size:12px;line-height:1.35;font-weight:700;font-variant-numeric:tabular-nums}
 .row .rtstats{display:grid;grid-template-columns:repeat(3,minmax(38px,1fr));gap:4px;margin-top:5px;min-width:138px}
 .row .vscore{display:inline-block;font-family:var(--sans);font-weight:800;font-size:12px;background:var(--ink-strong);color:var(--paper);border-radius:7px;padding:1px 6px;margin-bottom:3px;font-variant-numeric:tabular-nums}
@@ -287,6 +288,7 @@ ul.why li::before{content:"▸";position:absolute;left:2px;top:6px;color:var(--c
     <button class="chip" data-region="european indices" data-ac="index">Europe</button>
     <button class="chip" data-region="ftse 100" data-ac="index">FTSE 100</button>
     <button class="chip" data-region="dax" data-ac="index">DAX</button>
+    <button class="chip" data-region="euro stoxx 50" data-ac="index">Euro Stoxx</button>
     <button class="chip" data-region="" data-ac="commodity">Commodities</button>
     <button class="chip" data-region="" data-ac="forex">Forex</button>
     <button class="chip" data-region="" data-ac="crypto">Crypto</button>
@@ -456,7 +458,6 @@ function render(it){
    <div class="kicker">${esc((it.direction||'long').toUpperCase())} · ${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · rank ${it.rank}</div>
    <div class="rhd"><h1>${esc(it.symbol)}</h1><span class="co">${esc(it.name||'')}</span>
      <span class="spacer" style="flex:1"></span>
-     ${API.has?`<button class="addbtn" onclick="pushToAlice()">Send to Alice</button>`:''}
      ${API.has?`<button class="addbtn" onclick="addToPortfolio()">＋ Portfolio</button>`:''}
      <span class="badge dir-${esc(it.direction||'long')}">${esc((it.direction||'long').toUpperCase())}</span>
      <span class="badge sig">${esc(it.strategy_type||'')}</span></div>
@@ -519,7 +520,7 @@ function barrierBlock(r){const b=r._barrier;if(!b||b.p_target_first==null)return
     dcell('P(target first)',(b.p_target_first*100).toFixed(0)+'%')+
     dcell('P(stop first)',(b.p_stop_first*100).toFixed(0)+'%')+
     dcell('P(neither)',(b.p_neither*100).toFixed(0)+'%')+
-    dcell('Prob-weighted R',b.prob_R==null?'—':b.prob_R)+
+    dcell('Expected R · prob-weighted',b.expected_r==null?'—':b.expected_r)+
     dcell('~days to target',b.expected_days_to_target==null?'—':b.expected_days_to_target))}</div>`;}
 function termBlock(r){const t=r._term_structure;if(!t||!t.length)return '';
   return `<div class="block"><h2>Horizon term structure</h2>${dgrid(t.map(h=>

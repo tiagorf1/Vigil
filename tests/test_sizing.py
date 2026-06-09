@@ -51,3 +51,11 @@ def test_strong_edge_capped_by_max_weight():
     out = sizing.suggest(0.65, win_pct=15, loss_pct=5, vol_annual_pct=30)
     assert out["weight_pct"] <= 25.0
     assert out["weight_pct"] > 0
+
+
+def test_binding_is_max_position_when_half_kelly_exceeds_cap():
+    # Big edge -> half-Kelly > 25% -> capped by the max-position limit, not "kelly".
+    out = sizing.suggest(0.75, win_pct=20, loss_pct=5, vol_annual_pct=20, max_weight=0.25)
+    assert out["weight_pct"] == 25.0
+    assert out["binding"] == "max_position"
+    assert "max-position" in out["rationale"]

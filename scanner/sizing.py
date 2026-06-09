@@ -45,35 +45,43 @@ def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
                    and isinstance(win_pct, (int, float)) and win_pct > 0
                    and isinstance(loss_pct, (int, float)) and loss_pct > 0)
 
-    vt = None
+    # Uncapped vol-target weight, so we can tell whether the binding constraint is
+    # really the vol target or the hard max-position limit (they can coincide).
+    vt_raw = None
     if isinstance(vol_annual_pct, (int, float)) and vol_annual_pct > 0:
-        vt = min(target_vol / (vol_annual_pct / 100.0), max_weight)
+        vt_raw = target_vol / (vol_annual_pct / 100.0)
 
     if have_payoff:
         f_full = kelly_fraction(p_win, win_pct, loss_pct)        # 0 if no edge
-        f_kelly = min(f_full * kelly_fraction_used, max_weight)
-        weight = f_kelly if vt is None else min(f_kelly, vt)     # vol target = cap
         out["kelly_full"] = round(f_full, 4)
         if f_full <= 0:
-            binding = "no_edge"
-        elif vt is not None and vt < f_kelly:
-            binding = "vol_target"
+            weight, binding = 0.0, "no_edge"
         else:
-            binding = "kelly"
-    elif vt is not None:
-        weight = vt                                              # vol-only sizing
-        binding = "vol_target"
+            cands = {"kelly": f_full * kelly_fraction_used, "max_position": max_weight}
+            if vt_raw is not None:
+                cands["vol_target"] = vt_raw
+            binding = min(cands, key=cands.get)                  # the smallest constraint wins
+            weight = cands[binding]
+    elif vt_raw is not None:
+        cands = {"vol_target": vt_raw, "max_position": max_weight}
+        binding = min(cands, key=cands.get)
+        weight = cands[binding]
     else:
         return out
 
     weight = max(0.0, min(weight, max_weight))
+    kf = int(kelly_fraction_used * 100)
+    rationale = {
+        "no_edge": "no positive expectancy -> no position",
+        "kelly": f"{kf}% Kelly (edge-limited)",
+        "vol_target": f"{kf}% Kelly trimmed to the {int(target_vol*100)}% volatility target",
+        "max_position": f"{kf}% Kelly capped at the {int(max_weight*100)}% max-position limit",
+    }[binding]
     out.update({
         "weight_pct": round(weight * 100, 2),
-        "vol_target_pct": round(vt * 100, 2) if vt is not None else None,
+        "vol_target_pct": round(min(vt_raw, max_weight) * 100, 2) if vt_raw is not None else None,
         "binding": binding,
-        "rationale": ("no positive expectancy -> no position" if binding == "no_edge"
-                      else f"{int(kelly_fraction_used*100)}% Kelly capped by "
-                           f"{'volatility target' if binding == 'vol_target' else 'edge'}"),
+        "rationale": rationale,
     })
     if equity and equity > 0:
         out["dollar"] = round(weight * equity, 2)

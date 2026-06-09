@@ -24,15 +24,36 @@ from scanner.config import get_config
 _Z95 = 1.96
 
 
+def _clamp_prob(p):
+    """No real forecast is ever a literal 0%/100%. Keep prob_up in a sane band."""
+    try:
+        return round(min(0.98, max(0.02, float(p))), 4)
+    except (TypeError, ValueError):
+        return p
+
+
+# Shipped default calibration (from an early walk-forward backtest). Far better
+# than Kronos's raw overconfident cone; a user's own `outputs/forecast_calibration.json`
+# (regenerate via `python -m scanner.backtest`) overrides this entirely.
+_DEFAULT_CALIBRATION = {
+    "equity":    {"20": {"add_pct": 4.83, "sigma_pct": 10.85, "n": 20}},
+    "etf":       {"20": {"add_pct": 4.11, "sigma_pct": 7.94, "n": 8}},
+    "index":     {"20": {"add_pct": 3.50, "sigma_pct": 8.50, "n": 0}},
+    "crypto":    {"20": {"add_pct": -6.21, "sigma_pct": 11.53, "n": 8}},
+    "commodity": {"20": {"add_pct": 0.00, "sigma_pct": 6.00, "n": 0}},
+    "forex":     {"20": {"add_pct": -1.01, "sigma_pct": 0.94, "n": 4}},
+}
+
+
 @lru_cache(maxsize=1)
 def _load() -> dict:
     path = get_config().project_root / "outputs" / "forecast_calibration.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except Exception:  # noqa: BLE001
-        return {}
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    return _DEFAULT_CALIBRATION
 
 
 def reload() -> None:
@@ -59,23 +80,31 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
         return fc
     factors = _lookup(_load(), asset_class, horizon)
     fc = dict(fc)
+    raw_exp = fc.get("expected_return_pct") or 0.0
+    fc["raw_prob_up"] = fc.get("prob_up")
     if not factors:
+        # No empirical calibration file yet. Still de-pin prob_up using the model's
+        # OWN terminal vol so it never reports an unrealistic 0%/100% (Kronos's raw
+        # path-fraction pins to 0/1 on a small sample). Honest, even uncalibrated.
         fc["calibrated"] = False
+        sigma = fc.get("terminal_vol_pct")
+        if isinstance(sigma, (int, float)) and sigma > 1e-6:
+            z = raw_exp / sigma
+            fc["prob_up"] = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+        fc["prob_up"] = _clamp_prob(fc.get("prob_up"))
         return fc
 
     add = float(factors["add_pct"])         # percentage points to add to return
     sigma = float(factors["sigma_pct"])     # true terminal stdev, in %
     cur = fc.get("current_close")
-    raw_exp = fc.get("expected_return_pct") or 0.0
 
     fc["raw_expected_return_pct"] = raw_exp
-    fc["raw_prob_up"] = fc.get("prob_up")
     exp = raw_exp + add
     fc["expected_return_pct"] = round(exp, 4)
 
     if sigma > 1e-6:
         z = exp / sigma
-        fc["prob_up"] = round(0.5 * (1 + math.erf(z / math.sqrt(2))), 4)
+        fc["prob_up"] = _clamp_prob(0.5 * (1 + math.erf(z / math.sqrt(2))))
         fc["ret_q50_pct"] = round(exp, 4)
         fc["ret_q05_pct"] = round(exp - _Z95 * sigma, 4)
         fc["ret_q95_pct"] = round(exp + _Z95 * sigma, 4)

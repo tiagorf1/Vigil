@@ -49,7 +49,7 @@ def composite(report: dict, forecast: dict | None,
     # 3) Barrier prob-weighted R — level-based, already side-correct (the barrier
     #    sim uses target<entry for shorts).
     barrier = report.get("_barrier") or {}
-    pr = barrier.get("prob_R")
+    pr = barrier.get("expected_r")
     if isinstance(pr, (int, float)):
         comps.append(("barrier_R", _clamp((pr + 1) / 3 * 100), 0.22))
     pt, ps = barrier.get("p_target_first"), barrier.get("p_stop_first")
