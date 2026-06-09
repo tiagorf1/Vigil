@@ -470,6 +470,7 @@ function render(it){
      <button class="vtab" data-tab="data" onclick="switchTab('data')" style="background:none;border:none;font-family:var(--sans);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--faint);border-bottom:2px solid transparent;margin-bottom:-2px">Data &amp; stats</button>
    </div>
    <div id="tab-report">
+     ${sanityBlock(r)}
      ${dqBlock(r)}
      <div class="block"><h2>Thesis</h2><div class="thesis">${esc(r.thesis)}</div></div>
      ${(r.reasons&&r.reasons.length)?`<div class="block"><h2>Why now</h2><ul class="why">${r.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
@@ -529,6 +530,9 @@ function kqualBlock(r){const q=r._kronos_quality;if(typeof q!=='number')return '
   return `<div class="block"><h2>Kronos quality ${q.toFixed(0)}/100 · price-only asset</h2>${dgrid(Object.entries(bd).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
 function fbreakBlock(r){const b=r._fund_breakdown;if(!b)return '';
   return `<div class="block"><h2>Fundamental score breakdown</h2>${dgrid(Object.entries(b).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
+function sanityBlock(r){const v=r._sanity;if(!v||!v.length)return '';
+  const rows=v.map(x=>`<li><b>${esc(x.check)}</b> — ${esc(x.detail)}${x.value!=null?` <span style="color:var(--faint)">(${esc(String(x.value))})</span>`:''}${x.severity==='warn'?' <span style="color:var(--faint)">[warn]</span>':''}</li>`).join('');
+  return `<div class="block" style="border:1px solid var(--claret);border-radius:7px;padding:14px 16px;background:rgba(158,43,59,.04)"><h2 style="color:var(--claret)">⚠ Consistency check</h2><ul class="why" style="margin:0">${rows}</ul><div style="color:var(--faint);font-size:12px;margin-top:8px">The engine flagged internal inconsistencies in this pick's numbers — treat it with caution and report it.</div></div>`;}
 function dqBlock(r){const f=r._dq_flags;if(!f||!f.length)return '';
   return `<div class="block" style="border-left:3px solid var(--claret);padding-left:12px"><h2 style="color:var(--claret)">Data warning</h2><div class="tags">${f.map(x=>`<span class="badge">${esc(x)}</span>`).join('')}</div><div style="color:var(--faint);font-size:12px;margin-top:6px">Treat this pick with extra caution — the price history shows quality issues.</div></div>`;}
 function sizingBlock(r){const s=r._sizing;if(!s||s.weight_pct==null)return '';

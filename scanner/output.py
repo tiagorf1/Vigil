@@ -22,7 +22,7 @@ class WatchlistOutput:
               exits: list[dict] | None = None, benchmarks: list[dict] | None = None,
               max_per_sector: int = 3) -> dict:
         """`entries` items: {report, forecast, fund_score, tech_score, sector}."""
-        from scanner import scoring, sizing
+        from scanner import scoring, sizing, sanity
         held = {p.get("symbol") for p in (positions or [])}
         items = []
         for e in entries:
@@ -38,6 +38,15 @@ class WatchlistOutput:
                 target_vol=self.cfg.sizing_target_vol)
             if size.get("weight_pct") is not None:
                 report["_sizing"] = size
+            # Self-check: run financial-coherence invariants on the assembled pick.
+            violations = sanity.audit(report, forecast)
+            if violations:
+                report["_sanity"] = violations
+                errs = [v for v in violations if v.get("severity") == "error"]
+                logger.warning("Sanity: %s has %d violation(s)%s: %s",
+                               report.get("symbol"), len(violations),
+                               " (ERRORS)" if errs else "",
+                               "; ".join(v["check"] + ":" + v["detail"] for v in violations[:4]))
             items.append({
                 "symbol": report.get("symbol"),
                 "name": report.get("name"),
