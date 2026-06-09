@@ -84,6 +84,8 @@ def test_required_watchlist_keys():
                                  total_scanned=1, total_screened=1)
     item = wl["watchlist"][0]
     for key in ("rank", "symbol", "name", "conviction", "strategy_type",
-                "expected_return_pct", "risk_reward", "timeframe", "tags", "report"):
+                "expected_return_pct", "risk_reward", "timeframe", "tags", "report",
+                "opportunity"):
         assert key in item
+    assert item["opportunity"]["profiles"]["balanced"]["rank"] == 1
     assert "generated_at" in wl and "provider" in wl

@@ -22,7 +22,7 @@ class WatchlistOutput:
               exits: list[dict] | None = None, benchmarks: list[dict] | None = None,
               max_per_sector: int = 3) -> dict:
         """`entries` items: {report, forecast, fund_score, tech_score, sector}."""
-        from scanner import asset_registry, scoring, sizing, sanity
+        from scanner import asset_registry, opportunity_ranker, scoring, sizing, sanity
         from scanner import track_record
         held = {p.get("symbol") for p in (positions or [])}
         items = []
@@ -102,6 +102,7 @@ class WatchlistOutput:
 
         items.sort(key=_sort_key, reverse=True)
         items = _diversify(items, self.cfg.max_watchlist_size, max_per_sector)
+        opportunity_ranker.apply_ranks(items)
         for i, item in enumerate(items, start=1):
             item["rank"] = i
 

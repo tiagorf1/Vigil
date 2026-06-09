@@ -477,7 +477,7 @@ function metricsBlock(m){
 function decisionBlock(it){
   const d=it.decision_shapers||{},f=d.forecast||{},t=d.technical||{},s=d.scores||{};
   const defs=[
-    ['Fund score',s.fundamental,null],['Tech score',s.technical,null],
+    ['Fund screen',s.fundamental,null],['Tech screen',s.technical,null],
     ['Forecast',f.expected_return_pct,'pct'],['P up',f.prob_up,'prob'],
     ['90% low',f.ret_q05_pct,'pct'],['90% high',f.ret_q95_pct,'pct'],
     ['RSI',t.rsi14,null],['MACD hist',t.macd_hist,null],
@@ -491,7 +491,22 @@ function decisionBlock(it){
     const cls=type==='pct'?retCls(val):(type==='prob'?probCls(val):'');
     cells+=`<div class="shaper"><div class="sk">${label}</div><div class="sv ${cls}">${out}</div></div>`;
   });
-  return cells?`<div class="block"><h2>Decision shapers</h2><div class="shapers">${cells}</div></div>`:'';
+  const note='<div style="color:var(--faint);font-size:12px;margin-top:8px">Fund/tech are coarse screening inputs, not calibrated probabilities. The opportunity profile ranker is the better read on how to use the idea.</div>';
+  return cells?`<div class="block"><h2>Screening inputs · coarse filters</h2><div class="shapers">${cells}</div>${note}</div>`:'';
+}
+function opportunityBlock(it){
+  const op=it.opportunity||{},p=op.profiles||{};
+  const labels={conservative:'Conservative',balanced:'Balanced',aggressive:'Aggressive',speculative:'Speculative'};
+  const order=['conservative','balanced','aggressive','speculative'];
+  let cells='';
+  order.forEach(k=>{const r=p[k];if(!r)return;
+    const best=op.best_profile===k?' <small style="color:var(--claret)">best fit</small>':'';
+    cells+=dcell(labels[k],`#${r.rank||'—'} · ${r.score.toFixed(0)}/100${best}`);
+  });
+  if(!cells)return '';
+  const best=p[op.best_profile]||{};
+  const reasons=(best.reasons||[]).slice(0,3).map(x=>`<li>${esc(x)}</li>`).join('');
+  return `<div class="block"><h2>Opportunity profile ranker</h2>${dgrid(cells)}${reasons?`<ul class="why" style="margin-top:10px">${reasons}</ul>`:''}<div style="color:var(--faint);font-size:12px;margin-top:8px">Alternate rankings of the same pick: safety, all-around, asymmetric, and convex/speculative fit.</div></div>`;
 }
 function render(it){
   window.CURRENT=it;
@@ -508,9 +523,10 @@ function render(it){
      ${statTile('Conviction',`${stars(it.conviction)} <small>${it.conviction}/5</small>`)}
      ${statTile('Kronos ret',pct(it.expected_return_pct))}
      ${statTile('Probability up',rawProb(it.prob_up))}
+     ${(it.opportunity&&it.opportunity.best_profile)?statTile('Best profile',esc(it.opportunity.best_profile)):''}
      ${(it.track_record&&it.track_record.model&&it.track_record.model.available&&typeof it.track_record.model.direction_hit_rate==='number')?statTile('Model hit',`${(it.track_record.model.direction_hit_rate*100).toFixed(0)}%`):''}
-     ${statTile('Fund score',sbar(sc.fundamental))}
-     ${statTile('Tech score',sbar(sc.technical))}
+     ${statTile('Fund screen',sbar(sc.fundamental))}
+     ${statTile('Tech screen',sbar(sc.technical))}
    </div>
    <div style="display:flex;gap:2px;border-bottom:2px solid var(--ink-strong);margin-bottom:20px">
      <button class="vtab" data-tab="report" onclick="switchTab('report')" style="background:none;border:none;font-family:var(--sans);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--ink-strong);border-bottom:2px solid var(--claret);margin-bottom:-2px">Report</button>
@@ -520,6 +536,7 @@ function render(it){
      ${sanityBlock(r)}
      ${criticBlock(r)}
      ${dqBlock(r)}
+     ${opportunityBlock(it)}
      <div class="block"><h2>Thesis</h2><div class="thesis">${esc(r.thesis)}</div></div>
      ${(r.reasons&&r.reasons.length)?`<div class="block"><h2>Why now</h2><ul class="why">${r.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
      ${decisionBlock(it)}
@@ -613,8 +630,8 @@ function scoreBlock(it){const b=(it.report||{})._score_breakdown;if(!b)return ''
   const w=b._weights||{};
   const cells=Object.entries(b).filter(([k])=>k[0]!=='_')
     .map(([k,v])=>dcell(k+(w[k]?` ·w${w[k]}`:''),v)).join('');
-  const pen=b._penalty?`<div style="color:var(--claret);font-size:12px;margin-top:8px">${esc(b._penalty)}</div>`:'';
-  return `<div class="block"><h2>Vigil score ${typeof it.score==='number'?it.score.toFixed(0):'—'}/100 · how it's built</h2>${dgrid(cells)}${pen}</div>`;}
+  const flags=(b._trust_flags&&b._trust_flags.length)?`<div class="tags" style="margin-top:10px">${b._trust_flags.map(x=>`<span class="badge sig">${esc(x)}</span>`).join('')}</div>`:'';
+  return `<div class="block"><h2>Vigil blend ${typeof it.score==='number'?it.score.toFixed(0):'—'}/100 · sorter, not truth</h2>${dgrid(cells)}${flags}<div style="color:var(--faint);font-size:12px;margin-top:8px">This blends available evidence. Use the profile ranker and sizing block to decide how hard, if at all, to lean.</div></div>`;}
 function insightsBlock(r){const i=r._insights;if(!i||!Object.values(i).some(v=>v!=null))return '';
   const rows=[['Short-term',i.short_term],['Intermediate',i.intermediate_term],['Long-term',i.long_term],
     ['Support',i.support],['Resistance',i.resistance],['Yahoo risk ref',i.stop_loss],['Valuation',i.valuation]];
