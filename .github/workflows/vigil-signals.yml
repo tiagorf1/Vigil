@@ -11,10 +11,10 @@ name: Vigil daily signals
 #   (optional) GEMINI_API_KEY if you want LLM reports instead of templates.
 
 on:
-  schedule:
-    - cron: "0 7,12,16,21 * * 1-5"  # weekdays, multiple market windows
-    - cron: "0 9,21 * * 6,0"        # weekend crypto/FX/commodity check
-  workflow_dispatch:            # also run on demand from the Actions tab
+  # Scheduled runs DISABLED: Kronos-base is too heavy for GitHub's free 2-core /
+  # 6-hour runner (kept failing with "runner lost communication"). The always-on
+  # watcher now runs on the Oracle box (vigil-signals.timer). Manual-only fallback.
+  workflow_dispatch:            # run on demand from the Actions tab
     inputs:
       markets:
         description: "Markets/profile, e.g. global-liquid or us commodities forex crypto"
