@@ -69,3 +69,22 @@ def test_low_horizon_short_not_punished_for_strong_fundamentals():
     s_weak, _ = scoring.composite(weak_fund_short, {"prob_up": 0.2}, 10, 50)
     # Fundamentals are ignored at low horizon -> the two score the same.
     assert abs(s_strong - s_weak) < 0.01
+
+
+def test_non_sample_backed_calibration_penalizes_score():
+    rep = {"conviction": 4, "direction": "long", "horizon": "medium"}
+    sample, _ = scoring.composite(rep, {"prob_up": 0.7, "calibration_generation": "sample_backed"}, 80, 80)
+    default, bd = scoring.composite(rep, {"prob_up": 0.7, "calibration_generation": "default_prior"}, 80, 80)
+    assert default < sample
+    assert "default_prior" in bd["_penalty"]
+
+
+def test_earnings_and_data_warnings_penalize_score():
+    clean = {"conviction": 4, "direction": "long", "horizon": "medium", "tags": []}
+    warned = {"conviction": 4, "direction": "long", "horizon": "medium",
+              "tags": ["earnings_in_window", "data_warning"]}
+    s_clean, _ = scoring.composite(clean, {"prob_up": 0.7}, 80, 80)
+    s_warn, bd = scoring.composite(warned, {"prob_up": 0.7}, 80, 80)
+    assert s_warn < s_clean
+    assert "earnings_in_window" in bd["_penalty"]
+    assert "data_warning" in bd["_penalty"]
