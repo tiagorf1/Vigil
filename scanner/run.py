@@ -387,7 +387,14 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                         "val_rich_vs_peers" if ratio > 1.15 else "val_inline_peers"))
             if cand.sector:
                 tags.append(cand.sector.lower().replace(" ", "_"))
-            report["tags"] = list(dict.fromkeys(tags))
+            # Case-insensitive dedupe so LLM tags don't double up with system tags
+            # (e.g. "Technology" vs "technology", "Short" vs the "short" side tag).
+            _seen, _uniq = set(), []
+            for _t in tags:
+                _k = str(_t).strip().lower()
+                if _k and _k not in _seen:
+                    _seen.add(_k); _uniq.append(_k)
+            report["tags"] = _uniq
             # TA structure levels = the trade plan (not the wide forecast cone).
             report["_ta"] = ta
             if ta.get("setup") and ta.get("rr_value") and ta["rr_value"] > 0:
