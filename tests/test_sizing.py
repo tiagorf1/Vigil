@@ -37,3 +37,17 @@ def test_from_pick_uses_barrier_prob_and_ta():
     out = sizing.from_pick(report, {"terminal_vol_pct": 8.0}, equity=50_000)
     assert out["weight_pct"] is not None
     assert out["dollar"] is not None
+
+
+def test_no_edge_gives_zero_not_voltarget():
+    # Bad payoff/low win prob -> no edge -> 0% (not the vol-target fallback).
+    out = sizing.suggest(0.30, win_pct=5, loss_pct=10, vol_annual_pct=30, equity=100_000)
+    assert out["weight_pct"] == 0.0
+    assert out["binding"] == "no_edge"
+    assert out["dollar"] == 0.0
+
+
+def test_strong_edge_capped_by_max_weight():
+    out = sizing.suggest(0.65, win_pct=15, loss_pct=5, vol_annual_pct=30)
+    assert out["weight_pct"] <= 25.0
+    assert out["weight_pct"] > 0

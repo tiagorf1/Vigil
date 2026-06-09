@@ -49,6 +49,7 @@ class WatchlistOutput:
                 "decision_shapers": _decision_shapers(
                     e.get("indicators") or {}, forecast, e.get("fund_score"), e.get("tech_score")),
                 "strategy_type": report.get("strategy_type", "value"),
+                "direction": report.get("direction", "long"),
                 "expected_return_pct": forecast.get("expected_return_pct"),
                 "prob_up": forecast.get("prob_up"),
                 "ret_q05_pct": forecast.get("ret_q05_pct"),

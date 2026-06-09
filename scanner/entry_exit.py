@@ -53,9 +53,14 @@ def _swings(close: pd.Series, win: int = 5):
 
 
 def analyze(ohlcv: list[dict], direction: str = "long") -> dict:
-    """Structure-based entry/stop/target + confluence for a long setup."""
+    """Structure-based entry/stop/target + confluence for a LONG or SHORT setup.
+
+    `direction` should be chosen from the forecast (long if bullish, short if
+    bearish). The trend field is always reported so the caller can detect a
+    setup that fights the trend (low-confidence conflict)."""
     out = {"setup": None, "entry_zone": None, "stop": None, "target": None,
-           "rr": None, "confluence": 0, "signals": [], "adx": None, "trend": None}
+           "rr": None, "confluence": 0, "signals": [], "adx": None, "trend": None,
+           "direction": direction}
     df = ind.ohlcv_to_frame(ohlcv)
     if df.empty or len(df) < 60:
         return out
@@ -72,59 +77,98 @@ def analyze(ohlcv: list[dict], direction: str = "long") -> dict:
     adx = _adx(df)
     supports, resistances = _swings(close)
     recent_high = float(close.tail(20).max())
-
+    recent_low = float(close.tail(20).min())
     out["adx"] = round(adx, 1) if adx is not None else None
 
-    # ── confluence signals (long) ──
-    sig = []
     uptrend = sma50 is not None and px > sma50 and (sma200 is None or sma50 > sma200)
-    if uptrend:
-        sig.append("uptrend (price>SMA50>SMA200)")
-    out["trend"] = "up" if uptrend else ("down" if sma50 and px < sma50 else "range")
+    downtrend = sma50 is not None and px < sma50 and (sma200 is None or sma50 < sma200)
+    out["trend"] = "up" if uptrend else ("down" if downtrend else "range")
+
+    sig = []
     if adx is not None and adx >= 20:
         sig.append(f"trending (ADX {adx:.0f})")
-    if 40 <= rsi <= 65:
-        sig.append(f"RSI room ({rsi:.0f})")
-    elif rsi < 35:
-        sig.append(f"oversold turn ({rsi:.0f})")
-    if macd_hist > 0:
-        sig.append("MACD positive")
-    near_support = supports and (px - supports[0]) / px < 0.04
-    if near_support:
-        sig.append("pullback to support")
-    breakout = px >= recent_high * 0.999
-    if breakout:
-        sig.append("breakout of 20d high")
-    if px > ema20:
-        sig.append("above 20-EMA")
 
-    # ── levels ──
-    # Stop: just below nearest support, else ATR-based; floor at 1*ATR.
-    if supports:
-        stop = min(supports[0] * 0.995, px - 1.0 * atr)
+    if direction == "short":
+        # ── SHORT setup ──
+        if downtrend:
+            sig.append("downtrend (price<SMA50<SMA200)")
+        if 35 <= rsi <= 60:
+            sig.append(f"RSI room ({rsi:.0f})")
+        elif rsi > 65:
+            sig.append(f"overbought turn ({rsi:.0f})")
+        if macd_hist < 0:
+            sig.append("MACD negative")
+        near_res = resistances and (resistances[0] - px) / px < 0.04
+        if near_res:
+            sig.append("rally to resistance")
+        breakdown = px <= recent_low * 1.001
+        if breakdown:
+            sig.append("breakdown of 20d low")
+        if px < ema20:
+            sig.append("below 20-EMA")
+        # Levels: stop above nearest resistance (or ATR), target at support below.
+        if resistances:
+            stop = max(resistances[0] * 1.005, px + 1.0 * atr)
+        else:
+            stop = px + 1.5 * atr
+        risk = max(stop - px, 1e-9)
+        if supports:
+            target = min(supports[0], px - 1.5 * risk)
+        else:
+            target = px - 2.0 * risk
+        rr = (px - target) / risk if risk > 0 else None
+        if breakdown and downtrend:
+            setup = "breakdown"
+        elif near_res and downtrend:
+            setup = "bounce_short"
+        elif rsi > 65:
+            setup = "overbought_reversion"
+        elif downtrend:
+            setup = "downtrend_continuation"
+        else:
+            setup = "neutral"
+        trail = f"${px + 3*atr:,.2f} (3·ATR chandelier)"
     else:
-        stop = px - 1.5 * atr
-    # Target: nearest resistance above, else 2R projection.
-    risk = max(px - stop, 1e-9)
-    if resistances:
-        target = max(resistances[0], px + 1.5 * risk)
-    else:
-        target = px + 2.0 * risk
+        # ── LONG setup ──
+        if uptrend:
+            sig.append("uptrend (price>SMA50>SMA200)")
+        if 40 <= rsi <= 65:
+            sig.append(f"RSI room ({rsi:.0f})")
+        elif rsi < 35:
+            sig.append(f"oversold turn ({rsi:.0f})")
+        if macd_hist > 0:
+            sig.append("MACD positive")
+        near_support = supports and (px - supports[0]) / px < 0.04
+        if near_support:
+            sig.append("pullback to support")
+        breakout = px >= recent_high * 0.999
+        if breakout:
+            sig.append("breakout of 20d high")
+        if px > ema20:
+            sig.append("above 20-EMA")
+        if supports:
+            stop = min(supports[0] * 0.995, px - 1.0 * atr)
+        else:
+            stop = px - 1.5 * atr
+        risk = max(px - stop, 1e-9)
+        if resistances:
+            target = max(resistances[0], px + 1.5 * risk)
+        else:
+            target = px + 2.0 * risk
+        rr = (target - px) / risk if risk > 0 else None
+        if breakout and uptrend:
+            setup = "breakout"
+        elif near_support and uptrend:
+            setup = "pullback"
+        elif rsi < 35:
+            setup = "mean_reversion"
+        elif uptrend:
+            setup = "trend_continuation"
+        else:
+            setup = "neutral"
+        trail = f"${px - 3*atr:,.2f} (3·ATR chandelier)"
+
     entry_lo, entry_hi = px - 0.3 * atr, px + 0.3 * atr
-    rr = (target - px) / risk if risk > 0 else None
-
-    # Setup label
-    if breakout and uptrend:
-        setup = "breakout"
-    elif near_support and uptrend:
-        setup = "pullback"
-    elif rsi < 35:
-        setup = "mean_reversion"
-    elif uptrend:
-        setup = "trend_continuation"
-    else:
-        setup = "neutral"
-
     out.update({
         "setup": setup,
         "entry_zone": f"${entry_lo:,.2f}-${entry_hi:,.2f}",
@@ -136,7 +180,7 @@ def analyze(ohlcv: list[dict], direction: str = "long") -> dict:
         "target_value": round(target, 4),
         "confluence": len(sig),
         "signals": sig,
-        "trail_stop": f"${px - 3*atr:,.2f} (3·ATR chandelier)",
+        "trail_stop": trail,
         "atr": round(atr, 4),
     })
     return out

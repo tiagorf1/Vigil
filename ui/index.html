@@ -218,7 +218,9 @@ main{display:grid;grid-template-columns:minmax(330px,35%) 1fr;flex:1;min-height:
 .cell{padding:15px;border-right:1px solid var(--rule)}
 .cell:last-child{border-right:none}
 .cell .k{font-family:var(--sans);font-weight:800;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
-.cell .v{font-family:var(--serif);font-weight:600;font-size:18px;margin-top:7px;color:var(--ink-strong);font-variant-numeric:tabular-nums}
+.cell .v{font-family:var(--serif);font-weight:600;font-size:18px;margin-top:7px;color:var(--ink-strong);font-variant-numeric:tabular-nums;overflow-wrap:anywhere;line-height:1.25}
+.dir-long{background:#0c6b4f;color:#fff}
+.dir-short{background:var(--claret);color:#fff}
 ul.risks{margin:0;padding-left:0;list-style:none}
 ul.risks li{position:relative;padding:7px 0 7px 22px;line-height:1.55;font-size:14px;color:var(--ink);border-bottom:1px solid var(--rule)}
 ul.risks li:last-child{border-bottom:none}
@@ -400,7 +402,7 @@ function renderList(){
     d.innerHTML=`<div class="rk">${String(it.rank).padStart(2,'0')}</div>
       <div><div class="tk">${esc(it.symbol)}${it.held?' <span class="held">HELD</span>':''}</div>
       <div class="nm">${esc(it.name||'')}</div>
-      <div class="st">${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(it.horizon||'med')}</span></div></div>
+      <div class="st"><span class="hbadge dir-${esc(it.direction||'long')}">${(it.direction||'long')==='short'?'SHORT':'LONG'}</span>${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(it.horizon||'med')}</span></div></div>
       <div class="rt">${typeof it.score==='number'?`<div class="vscore" title="Vigil score">${it.score.toFixed(0)}</div>`:''}${stars(it.conviction)}
         <div class="rtstats">
           ${metricMini('RET',rawPct(it.expected_return_pct),retCls(it.expected_return_pct))}
@@ -453,11 +455,12 @@ function render(it){
   window.CURRENT=it;
   const r=it.report||{},sc=r._scores||{};
   $('report').innerHTML=`<div class="fadein">
-   <div class="kicker">${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · rank ${it.rank}</div>
+   <div class="kicker">${esc((it.direction||'long').toUpperCase())} · ${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · rank ${it.rank}</div>
    <div class="rhd"><h1>${esc(it.symbol)}</h1><span class="co">${esc(it.name||'')}</span>
      <span class="spacer" style="flex:1"></span>
      ${API.has?`<button class="addbtn" onclick="pushToAlice()">Send to Alice</button>`:''}
      ${API.has?`<button class="addbtn" onclick="addToPortfolio()">＋ Portfolio</button>`:''}
+     <span class="badge dir-${esc(it.direction||'long')}">${esc((it.direction||'long').toUpperCase())}</span>
      <span class="badge sig">${esc(it.strategy_type||'')}</span></div>
    <div class="rsub">
      ${typeof it.score==='number'?statTile('Vigil score',sbar(it.score)):''}

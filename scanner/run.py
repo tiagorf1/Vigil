@@ -272,17 +272,29 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         peer_median_pe = _stats.median(_pes) if len(_pes) >= 4 else None
 
         async def build_entry(cand):
-            # 1) Technical setup first (the spine) — defines trend + trade levels.
-            ta = entry_exit.analyze(cand.ohlcv)
-            # 2) Auto-select the operative horizon: shortest confident + TA-aligned.
+            # 1) Multi-horizon calibrated forecasts.
             per_h = {}
             for h in horizons:
                 raw = forecasts_by_h.get(h, {}).get(cand.symbol)
                 if raw:
                     per_h[h] = forecast_calibration.apply(raw, cand.asset_class, h)
+            # 2) Choose the trade SIDE from the forecast: bullish -> long, bearish ->
+            #    short. Blend horizons so one noisy horizon can't flip the side.
+            probs = [v.get("prob_up") for v in per_h.values()
+                     if isinstance(v.get("prob_up"), (int, float))]
+            exps = [v.get("expected_return_pct") for v in per_h.values()
+                    if isinstance(v.get("expected_return_pct"), (int, float))]
+            if probs:
+                bullish = (sum(probs) / len(probs)) >= 0.5
+            else:
+                bullish = (sum(exps) / len(exps) if exps else 0.0) >= 0
+            side = "long" if bullish else "short"
+            # 3) Structure-based levels for THAT side.
+            ta = entry_exit.analyze(cand.ohlcv, direction=side)
+            # 4) Operative horizon: shortest confident + forecast-agrees-with-trend.
             sel = HZ.select(per_h, ta, horizons)
             fc = per_h.get(sel.get("horizon_days")) if sel.get("horizon_days") else None
-            op_days = sel.get("horizon_days") or pred_len
+            op_days = sel.get("horizon_days") or max(horizons)
 
             news = await oa.get_news(cand.symbol, limit=5)
             earnings = await oa.get_earnings_calendar(cand.symbol) if asset_class == "equity" else {}
@@ -294,9 +306,11 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                     cand.symbol, cand.profile, fin, cand.ratios,
                     cand.analyst_estimates, cand.insider_trading, cand.indicators,
                     news, fc or {}, cand.fund_score, cand.tech_score,
+                    side,
                 )
             # Horizon class is now an OUTPUT of selection, not a user/heuristic input.
             report["horizon"] = sel["horizon_class"]
+            report["direction"] = side
             report["_horizon_days"] = sel.get("horizon_days")
             report["_forecast_agrees"] = sel.get("agrees")
             report["_forecast_confidence"] = sel.get("confidence")
@@ -306,6 +320,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             if isinstance(cand.fundamentals, dict) and cand.fundamentals.get("_frameworks"):
                 report["_frameworks"] = cand.fundamentals["_frameworks"]
             tags = list(report.get("tags", []))
+            tags.append(side)                        # 'long' or 'short'
             if cand.symbol in held:
                 tags.append("held")
             if earnings_soon:
@@ -313,7 +328,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             if asset_class in {"crypto", "etf", "commodity", "forex"}:
                 tags.append(asset_class)
             if not sel.get("agrees"):
-                tags.append("forecast_disagrees")   # Kronos does not confirm the TA setup
+                tags.append("counter_trend")   # forecast/trade fights the price trend
             if cand.profile.get("_dq_flags"):
                 report["_dq_flags"] = cand.profile["_dq_flags"]
                 tags.append("data_warning")

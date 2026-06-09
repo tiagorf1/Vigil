@@ -90,6 +90,7 @@ class ReportGenerator:
         self, symbol: str, profile: dict, financials: dict, ratios: dict,
         analyst_estimates: dict, insider_trading: dict, indicators: dict,
         news: list, forecast: dict, fund_score: float, tech_score: float,
+        direction: str = "long",
     ) -> dict:
         derived = self._derive_levels(indicators, forecast)
         name = _name_of(profile, symbol)
@@ -97,6 +98,7 @@ class ReportGenerator:
         payload = {
             "symbol": symbol,
             "name": name,
+            "trade_direction": direction,
             "scores": {"fundamental": fund_score, "technical": tech_score},
             "profile": _trim(profile),
             "financials": _trim(financials),
@@ -120,8 +122,15 @@ class ReportGenerator:
             return self._template_report(symbol, name, payload, derived,
                                          fund_score, tech_score)
 
+        side_note = (
+            "This is a SHORT idea: the forecast is bearish. Frame the thesis as a "
+            "short/sell case, treat entry/stop/target as a short (stop ABOVE entry, "
+            "target BELOW), and discuss downside catalysts. Do NOT write a bullish "
+            "'buy' thesis.\n\n" if direction == "short" else
+            "This is a LONG idea: frame it as a buy/accumulate case.\n\n")
         user_prompt = (
             "Produce the JSON research report for this security.\n\n"
+            + side_note
             + json.dumps(payload, default=str, indent=2)
             + "\n\nRequired JSON keys: " + ", ".join(_REQUIRED_KEYS)
             + "\nconviction is an integer 1-5. strategy_type is one of: "

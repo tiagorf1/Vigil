@@ -32,32 +32,48 @@ def kelly_fraction(p_win: float, win_pct: float, loss_pct: float) -> float:
 def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
             equity: float = 0.0, kelly_fraction_used: float = 0.5,
             target_vol: float = 0.15, max_weight: float = 0.25) -> dict:
-    """Return a sizing recommendation. All percentages are fractions of equity."""
+    """Return a sizing recommendation. All percentages are fractions of equity.
+
+    Logic: fractional Kelly is the BASE weight (0 when there's no edge); the vol
+    target and max_weight are CAPS on top of it. So a no-edge name gets ~0%, and
+    the vol target only ever pulls a high-edge name DOWN — it can never invent a
+    position where Kelly says there's no expectancy."""
     out = {"kelly_full": None, "weight_pct": None, "vol_target_pct": None,
            "dollar": None, "rationale": None, "binding": None}
 
-    f_full = kelly_fraction(p_win, win_pct, loss_pct) if (
-        isinstance(p_win, (int, float)) and isinstance(win_pct, (int, float))
-        and isinstance(loss_pct, (int, float))) else 0.0
-    f_kelly = min(f_full * kelly_fraction_used, max_weight)
+    have_payoff = (isinstance(p_win, (int, float)) and 0 < p_win < 1
+                   and isinstance(win_pct, (int, float)) and win_pct > 0
+                   and isinstance(loss_pct, (int, float)) and loss_pct > 0)
 
     vt = None
     if isinstance(vol_annual_pct, (int, float)) and vol_annual_pct > 0:
         vt = min(target_vol / (vol_annual_pct / 100.0), max_weight)
 
-    candidates = [w for w in (f_kelly if f_full > 0 else None, vt) if isinstance(w, (int, float))]
-    if not candidates:
+    if have_payoff:
+        f_full = kelly_fraction(p_win, win_pct, loss_pct)        # 0 if no edge
+        f_kelly = min(f_full * kelly_fraction_used, max_weight)
+        weight = f_kelly if vt is None else min(f_kelly, vt)     # vol target = cap
+        out["kelly_full"] = round(f_full, 4)
+        if f_full <= 0:
+            binding = "no_edge"
+        elif vt is not None and vt < f_kelly:
+            binding = "vol_target"
+        else:
+            binding = "kelly"
+    elif vt is not None:
+        weight = vt                                              # vol-only sizing
+        binding = "vol_target"
+    else:
         return out
-    weight = max(0.0, min(candidates))
-    binding = "kelly" if (vt is None or (f_full > 0 and f_kelly <= vt)) else "vol_target"
 
+    weight = max(0.0, min(weight, max_weight))
     out.update({
-        "kelly_full": round(f_full, 4) if f_full else 0.0,
         "weight_pct": round(weight * 100, 2),
         "vol_target_pct": round(vt * 100, 2) if vt is not None else None,
         "binding": binding,
-        "rationale": (f"{int(kelly_fraction_used*100)}% Kelly capped by "
-                      f"{'volatility target' if binding == 'vol_target' else 'edge'}"),
+        "rationale": ("no positive expectancy -> no position" if binding == "no_edge"
+                      else f"{int(kelly_fraction_used*100)}% Kelly capped by "
+                           f"{'volatility target' if binding == 'vol_target' else 'edge'}"),
     })
     if equity and equity > 0:
         out["dollar"] = round(weight * equity, 2)

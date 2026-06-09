@@ -68,9 +68,10 @@ def composite(report: dict, forecast: dict | None,
     breakdown = {name: round(s, 1) for name, s, _ in comps}
     breakdown["_weights"] = {name: round(w / total_w, 2) for name, _, w in comps}
 
-    # Penalty: Kronos does not confirm the TA setup -> shave confidence.
+    # Penalty: the trade fights the price trend (forecast direction != trend).
+    # This is the catch-a-falling-knife / catch-the-top case — heavily demote it.
     if report.get("_forecast_agrees") is False:
-        score *= 0.92
-        breakdown["_penalty"] = "forecast_disagrees -8%"
+        score *= 0.70
+        breakdown["_penalty"] = "counter_trend -30%"
 
     return round(_clamp(score), 1), breakdown
