@@ -59,3 +59,38 @@ def test_binding_is_max_position_when_half_kelly_exceeds_cap():
     assert out["weight_pct"] == 25.0
     assert out["binding"] == "max_position"
     assert "max-position" in out["rationale"]
+
+
+def test_short_fallback_inverts_prob_up_for_win_probability():
+    report = {
+        "direction": "short",
+        "_ta": {"entry_value": 100, "stop_value": 105, "target_value": 90},
+        "_horizon_days": 20,
+    }
+    out = sizing.from_pick(report, {"prob_up": 0.2, "terminal_vol_pct": 8.0}, equity=50_000)
+    assert out["p_win_used"] == 0.8
+    assert out["weight_pct"] is not None and out["weight_pct"] > 0
+
+
+def test_negative_barrier_expected_r_forces_no_position():
+    report = {
+        "_barrier": {"p_target_first": 0.7, "expected_r": -0.2},
+        "_ta": {"entry_value": 100, "stop_value": 95, "target_value": 110},
+        "_horizon_days": 20,
+    }
+    out = sizing.from_pick(report, {"terminal_vol_pct": 8.0}, equity=50_000)
+    assert out["weight_pct"] == 0.0
+    assert out["binding"] == "no_edge"
+    assert "expected R" in out["rationale"]
+
+
+def test_confidence_haircut_affects_sizing_not_score():
+    report = {
+        "tags": ["earnings_in_window", "data_warning"],
+        "_ta": {"entry_value": 100, "stop_value": 95, "target_value": 115},
+        "_horizon_days": 20,
+    }
+    out = sizing.from_pick(report, {"prob_up": 0.75, "terminal_vol_pct": 8.0,
+                                    "calibration_generation": "default_prior"})
+    assert out["confidence_multiplier"] < 1.0
+    assert "confidence haircut" in out["rationale"]

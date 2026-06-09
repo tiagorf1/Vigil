@@ -87,29 +87,23 @@ def composite(report: dict, forecast: dict | None,
     breakdown = {name: round(s, 1) for name, s, _ in comps}
     breakdown["_weights"] = {name: round(w / total_w, 2) for name, _, w in comps}
 
-    penalties = []
+    trust_flags = []
 
-    # Penalty: the trade fights the price trend (forecast direction != trend).
-    # This is the catch-a-falling-knife / catch-the-top case — heavily demote it.
+    # Trust flags: these should inform human review and sizing, not bury the
+    # opportunity score. Counter-trend reversals can be exactly where the edge is.
     if report.get("_forecast_agrees") is False:
-        score *= 0.70
-        penalties.append("counter_trend -30%")
+        trust_flags.append("counter_trend")
 
     tags = {str(t).lower() for t in report.get("tags", [])}
     cal_gen = forecast.get("calibration_generation")
     if cal_gen and cal_gen != "sample_backed":
-        # Until the cloud has a real sample-backed calibration, forecasts are useful
-        # but not allowed to be as loud as historically verified buckets.
-        score *= 0.85
-        penalties.append(f"{cal_gen} calibration -15%")
+        trust_flags.append(f"{cal_gen}_calibration")
     if "earnings_in_window" in tags:
-        score *= 0.75
-        penalties.append("earnings_in_window -25%")
+        trust_flags.append("earnings_in_window")
     if "data_warning" in tags:
-        score *= 0.80
-        penalties.append("data_warning -20%")
+        trust_flags.append("data_warning")
 
-    if penalties:
-        breakdown["_penalty"] = "; ".join(penalties)
+    if trust_flags:
+        breakdown["_trust_flags"] = trust_flags
 
     return round(_clamp(score), 1), breakdown

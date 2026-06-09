@@ -594,7 +594,10 @@ function sizingBlock(r){const s=r._sizing;if(!s||s.weight_pct==null)return '';
   let cells=dcell('Suggested weight',s.weight_pct.toFixed(1)+'%');
   if(s.dollar!=null)cells+=dcell('Amount','$'+Number(s.dollar).toLocaleString());
   if(s.kelly_full!=null)cells+=dcell('Full Kelly',(s.kelly_full*100).toFixed(1)+'%');
+  if(s.p_win_used!=null)cells+=dcell('P(win) used',(s.p_win_used*100).toFixed(0)+'%');
+  if(s.expected_r!=null)cells+=dcell('Expected R',s.expected_r);
   if(s.vol_target_pct!=null)cells+=dcell('Vol-target wt',s.vol_target_pct.toFixed(1)+'%');
+  if(s.confidence_multiplier!=null&&s.confidence_multiplier<1)cells+=dcell('Confidence haircut','x'+s.confidence_multiplier.toFixed(2));
   if(s.binding)cells+=dcell('Binding constraint',esc(s.binding));
   const note=s.rationale?`<div style="color:var(--faint);font-size:12px;margin-top:8px">${esc(s.rationale)} · advisory only</div>`:'';
   return `<div class="block"><h2>Position sizing</h2>${dgrid(cells)}${note}</div>`;}
@@ -602,7 +605,7 @@ function setupBlock(r){const t=r._ta;if(!t||!t.setup)return '';
   const mp=r._meta_prob_up;
   const rows=[['Setup',esc(t.setup)],['Trend',esc(t.trend||'—')],
     ['ADX',t.adx==null?'—':t.adx],['Confluence',(t.confluence||0)+'/5'],
-    ['Trailing stop',t.trail_stop==null?'—':t.trail_stop]];
+    ['Trailing stop (after entry)',t.trail_stop==null?'—':t.trail_stop]];
   if(typeof mp==='number')rows.push(['Calibrated P(up)',(mp*100).toFixed(0)+'%']);
   const sigs=(t.signals&&t.signals.length)?`<ul class="why" style="margin-top:10px">${t.signals.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:'';
   return `<div class="block"><h2>Technical setup</h2>${dgrid(rows.map(([k,v])=>dcell(k,v)).join(''))}${sigs}</div>`;}
@@ -614,7 +617,7 @@ function scoreBlock(it){const b=(it.report||{})._score_breakdown;if(!b)return ''
   return `<div class="block"><h2>Vigil score ${typeof it.score==='number'?it.score.toFixed(0):'—'}/100 · how it's built</h2>${dgrid(cells)}${pen}</div>`;}
 function insightsBlock(r){const i=r._insights;if(!i||!Object.values(i).some(v=>v!=null))return '';
   const rows=[['Short-term',i.short_term],['Intermediate',i.intermediate_term],['Long-term',i.long_term],
-    ['Support',i.support],['Resistance',i.resistance],['Yahoo stop',i.stop_loss],['Valuation',i.valuation]];
+    ['Support',i.support],['Resistance',i.resistance],['Yahoo risk ref',i.stop_loss],['Valuation',i.valuation]];
   const cells=rows.filter(([,v])=>v!=null&&v!=='').map(([k,v])=>dcell(k,esc(String(v)))).join('');
   return cells?`<div class="block"><h2>Yahoo insights · independent read</h2>${dgrid(cells)}</div>`:'';}
 function peersBlock(r){const p=r._peers;if(!p||!p.length)return '';

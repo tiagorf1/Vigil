@@ -31,7 +31,8 @@ def kelly_fraction(p_win: float, win_pct: float, loss_pct: float) -> float:
 
 def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
             equity: float = 0.0, kelly_fraction_used: float = 0.5,
-            target_vol: float = 0.15, max_weight: float = 0.25) -> dict:
+            target_vol: float = 0.15, max_weight: float = 0.25,
+            confidence_multiplier: float = 1.0, no_edge_reason: str | None = None) -> dict:
     """Return a sizing recommendation. All percentages are fractions of equity.
 
     Logic: fractional Kelly is the BASE weight (0 when there's no edge); the vol
@@ -39,7 +40,13 @@ def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
     the vol target only ever pulls a high-edge name DOWN — it can never invent a
     position where Kelly says there's no expectancy."""
     out = {"kelly_full": None, "weight_pct": None, "vol_target_pct": None,
-           "dollar": None, "rationale": None, "binding": None}
+           "dollar": None, "rationale": None, "binding": None,
+           "confidence_multiplier": round(float(confidence_multiplier or 1.0), 3)}
+
+    if no_edge_reason:
+        out.update({"weight_pct": 0.0, "dollar": 0.0 if equity and equity > 0 else None,
+                    "binding": "no_edge", "rationale": no_edge_reason})
+        return out
 
     have_payoff = (isinstance(p_win, (int, float)) and 0 < p_win < 1
                    and isinstance(win_pct, (int, float)) and win_pct > 0
@@ -69,7 +76,8 @@ def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
     else:
         return out
 
-    weight = max(0.0, min(weight, max_weight))
+    conf = max(0.0, min(1.0, float(confidence_multiplier or 1.0)))
+    weight = max(0.0, min(weight, max_weight)) * conf
     kf = int(kelly_fraction_used * 100)
     rationale = {
         "no_edge": "no positive expectancy -> no position",
@@ -77,6 +85,8 @@ def suggest(p_win, win_pct, loss_pct, vol_annual_pct,
         "vol_target": f"{kf}% Kelly trimmed to the {int(target_vol*100)}% volatility target",
         "max_position": f"{kf}% Kelly capped at the {int(max_weight*100)}% max-position limit",
     }[binding]
+    if conf < 1.0 and binding != "no_edge":
+        rationale += f"; confidence haircut x{conf:.2f}"
     out.update({
         "weight_pct": round(weight * 100, 2),
         "vol_target_pct": round(min(vt_raw, max_weight) * 100, 2) if vt_raw is not None else None,
@@ -94,13 +104,24 @@ def from_pick(report: dict, forecast: dict | None, equity: float = 0.0,
     forecast = forecast or {}
     barrier = report.get("_barrier") or {}
     ta = report.get("_ta") or {}
+    direction = report.get("direction", "long")
+    is_short = direction == "short"
+
+    no_edge_reason = None
+    er = barrier.get("expected_r")
+    if isinstance(er, (int, float)) and er <= 0:
+        no_edge_reason = f"barrier expected R {er} <= 0 -> no position"
 
     # Win probability: prefer the path-cloud barrier prob, else calibrated/raw prob_up.
     p_win = barrier.get("p_target_first")
     if not isinstance(p_win, (int, float)):
         p_win = report.get("_meta_prob_up")
+        if isinstance(p_win, (int, float)) and is_short:
+            p_win = 1.0 - p_win
     if not isinstance(p_win, (int, float)):
         p_win = forecast.get("prob_up")
+        if isinstance(p_win, (int, float)) and is_short:
+            p_win = 1.0 - p_win
 
     # Asymmetric payoff from the TA plan.
     entry = ta.get("entry_value"); stop = ta.get("stop_value"); target = ta.get("target_value")
@@ -114,5 +135,24 @@ def from_pick(report: dict, forecast: dict | None, equity: float = 0.0,
     horizon = report.get("_horizon_days") or 20
     vol_annual = vol * math.sqrt(252.0 / horizon) if isinstance(vol, (int, float)) and horizon else vol
 
-    return suggest(p_win, win_pct, loss_pct, vol_annual, equity,
-                   kelly_fraction_used, target_vol)
+    conf = _confidence_multiplier(report, forecast)
+    out = suggest(p_win, win_pct, loss_pct, vol_annual, equity,
+                  kelly_fraction_used, target_vol,
+                  confidence_multiplier=conf, no_edge_reason=no_edge_reason)
+    out["p_win_used"] = round(p_win, 4) if isinstance(p_win, (int, float)) else None
+    out["expected_r"] = er
+    return out
+
+
+def _confidence_multiplier(report: dict, forecast: dict) -> float:
+    """Size haircut for uncertainty, without suppressing opportunity ranking."""
+    tags = {str(t).lower() for t in report.get("tags", [])}
+    mult = 1.0
+    cal_gen = forecast.get("calibration_generation")
+    if cal_gen and cal_gen != "sample_backed":
+        mult *= 0.85
+    if "earnings_in_window" in tags:
+        mult *= 0.70
+    if "data_warning" in tags:
+        mult *= 0.75
+    return round(mult, 4)
