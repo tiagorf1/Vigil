@@ -471,6 +471,7 @@ function render(it){
    </div>
    <div id="tab-report">
      ${sanityBlock(r)}
+     ${criticBlock(r)}
      ${dqBlock(r)}
      <div class="block"><h2>Thesis</h2><div class="thesis">${esc(r.thesis)}</div></div>
      ${(r.reasons&&r.reasons.length)?`<div class="block"><h2>Why now</h2><ul class="why">${r.reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:''}
@@ -530,6 +531,11 @@ function kqualBlock(r){const q=r._kronos_quality;if(typeof q!=='number')return '
   return `<div class="block"><h2>Kronos quality ${q.toFixed(0)}/100 · price-only asset</h2>${dgrid(Object.entries(bd).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
 function fbreakBlock(r){const b=r._fund_breakdown;if(!b)return '';
   return `<div class="block"><h2>Fundamental score breakdown</h2>${dgrid(Object.entries(b).map(([k,v])=>dcell(k,v)).join(''))}</div>`;}
+function criticBlock(r){const c=r._critic;if(!c||(c.coherent&&!(c.concerns&&c.concerns.length)))return '';
+  const sev=c.severity||'low';
+  const col=sev==='high'?'var(--claret)':(sev==='medium'?'#B8860B':'var(--rule-2)');
+  const rows=(c.concerns||[]).map(x=>`<li>${esc(x)}</li>`).join('')||'<li>flagged as not fully coherent</li>';
+  return `<div class="block" style="border:1px solid ${col};border-radius:7px;padding:14px 16px"><h2 style="color:${col}">AI critic · ${esc(sev)} severity</h2><ul class="why" style="margin:0">${rows}</ul><div style="color:var(--faint);font-size:12px;margin-top:8px">An LLM auditor reviewed this pick's numbers for financial coherence.</div></div>`;}
 function sanityBlock(r){const v=r._sanity;if(!v||!v.length)return '';
   const rows=v.map(x=>`<li><b>${esc(x.check)}</b> — ${esc(x.detail)}${x.value!=null?` <span style="color:var(--faint)">(${esc(String(x.value))})</span>`:''}${x.severity==='warn'?' <span style="color:var(--faint)">[warn]</span>':''}</li>`).join('');
   return `<div class="block" style="border:1px solid var(--claret);border-radius:7px;padding:14px 16px;background:rgba(158,43,59,.04)"><h2 style="color:var(--claret)">⚠ Consistency check</h2><ul class="why" style="margin:0">${rows}</ul><div style="color:var(--faint);font-size:12px;margin-top:8px">The engine flagged internal inconsistencies in this pick's numbers — treat it with caution and report it.</div></div>`;}

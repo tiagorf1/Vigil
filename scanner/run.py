@@ -434,6 +434,36 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             "model": cfg.kronos_model,
         }
         watchlist["regime"] = regime_info
+
+        # ── Layer-2 LLM critic: audit each final pick's numbers for coherence ──
+        if cfg.llm_provider in ("gemini", "anthropic") and watchlist.get("watchlist"):
+            status("      Critic: auditing picks for coherence...")
+            async def _critique(item):
+                rep = item.get("report", {})
+                ta = rep.get("_ta") or {}
+                packet = {
+                    "symbol": item.get("symbol"), "direction": rep.get("direction"),
+                    "horizon": item.get("horizon"), "conviction": item.get("conviction"),
+                    "vigil_score": item.get("score"),
+                    "forecast": {k: item.get(k) for k in (
+                        "expected_return_pct", "prob_up", "ret_q05_pct",
+                        "ret_q95_pct", "terminal_vol_pct")},
+                    "barrier": rep.get("_barrier"), "sizing": rep.get("_sizing"),
+                    "levels": {k: ta.get(k) for k in (
+                        "entry_value", "stop_value", "target_value", "rr_value",
+                        "setup", "trend")},
+                    "scores": {"fundamental": item.get("fund_score"),
+                               "technical": item.get("tech_score")},
+                    "strategy_type": item.get("strategy_type"),
+                }
+                async with sem:
+                    verdict = await asyncio.to_thread(generator.critique, packet)
+                if verdict and (not verdict.get("coherent") or verdict.get("concerns")):
+                    item.setdefault("report", {})["_critic"] = verdict
+                    if verdict.get("severity") in ("medium", "high"):
+                        logger.warning("Critic flagged %s (%s): %s", item.get("symbol"),
+                                       verdict.get("severity"), "; ".join(verdict.get("concerns", [])[:3]))
+            await asyncio.gather(*[_critique(it) for it in watchlist["watchlist"]])
         if args.max_results:
             watchlist["watchlist"] = watchlist["watchlist"][: args.max_results]
         path = out.save(watchlist)

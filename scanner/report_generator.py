@@ -51,6 +51,19 @@ Rules:
 - Output valid JSON only - no preamble, no markdown fences.
 """
 
+CRITIC_SYSTEM = """\
+You are a meticulous quantitative risk auditor reviewing an AUTOMATED trading pick
+for INTERNAL COHERENCE and basic financial sense. You are NOT re-doing the
+analysis — you are checking whether the computed numbers contradict each other or
+violate elementary finance. Flag things like: a long with a bearish forecast (or a
+short with a bullish one); a stop on the wrong side of entry; a risk/reward that
+does not match the entry/stop/target; "high conviction" on a near-coin-flip
+probability; a position size that ignores a missing edge; a horizon that fights the
+thesis; or any claim unsupported by the supplied numbers. Be specific and terse.
+Output ONLY JSON: {"coherent": bool, "severity": "low|medium|high",
+"concerns": ["..."]}. Use severity "high" only for a problem that would change the
+decision; "low" if it is essentially coherent."""
+
 _REQUIRED_KEYS = [
     "symbol", "name", "conviction", "thesis", "reasons", "horizon",
     "fundamental_summary", "technical_summary", "forecast_summary", "entry_zone",
@@ -148,13 +161,13 @@ class ReportGenerator:
                                          fund_score, tech_score)
 
     # ── provider dispatch (with retry/backoff) ────────────────────────────
-    def _call_llm(self, system: str, user: str) -> str:
+    def _call_llm(self, system: str, user: str, schema=_ReportSchema) -> str:
         import time
         last_exc = None
         for attempt in range(3):
             try:
                 if self.provider == "gemini":
-                    return self._call_gemini(system, user)
+                    return self._call_gemini(system, user, schema)
                 if self.provider == "anthropic":
                     return self._call_anthropic(system, user)
                 raise RuntimeError(f"unknown provider {self.provider}")
@@ -172,22 +185,40 @@ class ReportGenerator:
                 raise
         raise last_exc  # pragma: no cover
 
-    def _call_gemini(self, system: str, user: str) -> str:
+    def _call_gemini(self, system: str, user: str, schema=_ReportSchema) -> str:
         if self._client is None:
             from google import genai
             self._client = genai.Client(api_key=self.cfg.gemini_api_key)
         from google.genai import types
+        cfg_kw = dict(system_instruction=system, response_mime_type="application/json",
+                      temperature=0.4)
+        if schema is not None:
+            cfg_kw["response_schema"] = schema   # guarantees the report shape
         resp = self._client.models.generate_content(
-            model=self.cfg.gemini_model,
-            contents=user,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                response_mime_type="application/json",
-                response_schema=_ReportSchema,   # guarantees shape
-                temperature=0.4,
-            ),
-        )
+            model=self.cfg.gemini_model, contents=user,
+            config=types.GenerateContentConfig(**cfg_kw))
         return resp.text or ""
+
+    # ── Layer-2 critic: audit computed numbers for financial coherence ────────
+    def critique(self, packet: dict) -> dict | None:
+        """LLM audit of a COMPUTED pick (not a re-analysis). Returns
+        {coherent, severity, concerns} or None when no LLM provider is active."""
+        if self.provider not in ("gemini", "anthropic"):
+            return None
+        user = ("Audit this automated pick for internal coherence. Return ONLY JSON "
+                '{"coherent": bool, "severity": "low|medium|high", "concerns": [str]}.'
+                "\n\n" + json.dumps(packet, default=str, indent=2))
+        try:
+            raw = self._call_llm(CRITIC_SYSTEM, user, schema=None)
+            data = self._parse(raw)
+            return {
+                "coherent": bool(data.get("coherent", True)),
+                "severity": str(data.get("severity", "low")).lower(),
+                "concerns": [str(c) for c in (data.get("concerns") or []) if c][:6],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("critique failed: %s", exc)
+            return None
 
     def _call_anthropic(self, system: str, user: str) -> str:
         if self._client is None:
