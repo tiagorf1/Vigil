@@ -71,6 +71,40 @@ async def coingecko_top(n: int = 20) -> list[str]:
     return list(SEED_CRYPTO)
 
 
+# Named indices Vigil understands as typed/spoken directives (asset_class=index).
+# These scan the index symbols themselves (momentum-scored); no component list
+# needed, so European/Asian markets work without constituent data.
+NAMED_INDEX = {
+    "ftse 100": ["^FTSE"], "ftse100": ["^FTSE"], "ftse": ["^FTSE"], "uk": ["^FTSE"],
+    "dax": ["^GDAXI"], "germany": ["^GDAXI"],
+    "cac 40": ["^FCHI"], "cac": ["^FCHI"], "france": ["^FCHI"],
+    "euro stoxx 50": ["^STOXX50E"], "euro stoxx": ["^STOXX50E"], "stoxx 50": ["^STOXX50E"], "stoxx": ["^STOXX50E"],
+    "ibex 35": ["^IBEX"], "ibex": ["^IBEX"], "spain": ["^IBEX"],
+    "aex": ["^AEX"], "netherlands": ["^AEX"],
+    "ftse mib": ["FTSEMIB.MI"], "mib": ["FTSEMIB.MI"], "italy": ["FTSEMIB.MI"],
+    "smi": ["^SSMI"], "switzerland": ["^SSMI"],
+    "european indices": ["^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^AEX", "^IBEX"],
+    "european": ["^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^AEX", "^IBEX"],
+    "europe": ["^FTSE", "^GDAXI", "^FCHI", "^STOXX50E", "^AEX", "^IBEX"],
+    "nikkei": ["^N225"], "japan": ["^N225"],
+    "hang seng": ["^HSI"], "hong kong": ["^HSI"],
+    "asian indices": ["^N225", "^HSI", "000001.SS", "^BSESN", "^AXJO"],
+    "asia": ["^N225", "^HSI", "000001.SS", "^BSESN", "^AXJO"],
+}
+
+
+def _match_named_index(directive: str) -> list[str]:
+    low = (directive or "").lower().strip()
+    if not low:
+        return []
+    if low in NAMED_INDEX:
+        return list(NAMED_INDEX[low])
+    for k in sorted(NAMED_INDEX, key=len, reverse=True):   # longest key wins
+        if k in low:
+            return list(NAMED_INDEX[k])
+    return []
+
+
 _CRYPTO_HINTS = {"crypto", "bitcoin", "ethereum", "token", "coin", "defi", "altcoin"}
 _COMMODITY_HINTS = {"commodity", "commodities", "futures", "gold", "oil", "metals", "energy"}
 _FOREX_HINTS = {"forex", "fx", "currency", "currencies", "eurusd", "usdjpy"}
@@ -98,6 +132,11 @@ class UniverseBuilder:
         # Index/ETF presets expand to component companies. The scanner's job is
         # to find investable company ideas, not forecast SPY or ^GSPC directly.
         if asset_class == "index":
+            # Named (esp. European/Asian) indices -> scan the index symbols directly.
+            named = _match_named_index(directive)
+            if named:
+                logger.info("Named index '%s' -> %s", directive, ", ".join(named))
+                return named[: self.cfg.max_universe_size]
             symbols, etfs = await expand_index_directive(directive)
             if symbols:
                 symbols = _prioritize_for_local(symbols)

@@ -152,10 +152,17 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         asset_class = args.asset_class or ("crypto" if _looks_crypto(universe) else "equity")
         benchmark_symbols: list[str] = []
         if requested_asset_class == "index":
-            benchmark_symbols = _dedupe(preset_etfs(directive) + sector_etfs_for_directive(directive))
-            asset_class = "equity"
-            if benchmark_symbols:
-                status("      Benchmark ETF(s): " + ", ".join(benchmark_symbols))
+            # US presets expand to company components (scored as equities). Named
+            # indices (^FTSE, ^GDAXI, FTSEMIB.MI ...) are scanned as the indices
+            # themselves with momentum scoring.
+            if any(s.startswith("^") or "." in s for s in universe):
+                asset_class = "index"
+                status("      Scanning index level (momentum): " + ", ".join(universe[:8]))
+            else:
+                benchmark_symbols = _dedupe(preset_etfs(directive) + sector_etfs_for_directive(directive))
+                asset_class = "equity"
+                if benchmark_symbols:
+                    status("      Benchmark ETF(s): " + ", ".join(benchmark_symbols))
 
         # Portfolio context: OpenAlice positions + your local Vigil portfolio.
         from scanner.portfolio import PortfolioStore

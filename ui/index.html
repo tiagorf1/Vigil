@@ -284,6 +284,9 @@ ul.why li::before{content:"▸";position:absolute;left:2px;top:6px;color:var(--c
     <button class="chip" data-region="s&p 500" data-ac="index">S&P 500 components</button>
     <button class="chip" data-region="nasdaq 100" data-ac="index">Nasdaq 100</button>
     <button class="chip" data-region="dow 30" data-ac="index">Dow 30</button>
+    <button class="chip" data-region="european indices" data-ac="index">Europe</button>
+    <button class="chip" data-region="ftse 100" data-ac="index">FTSE 100</button>
+    <button class="chip" data-region="dax" data-ac="index">DAX</button>
     <button class="chip" data-region="" data-ac="commodity">Commodities</button>
     <button class="chip" data-region="" data-ac="forex">Forex</button>
     <button class="chip" data-region="" data-ac="crypto">Crypto</button>
@@ -619,6 +622,7 @@ function renderHeader(){
   $('prov-pill').textContent='synth: '+(DATA.provider||'—')+ftxt;
 }
 function renderAll(){
+  window.__view='watchlist';
   if(!DATA||!DATA.watchlist||!DATA.watchlist.length){
     $('list').innerHTML='';
     $('report').innerHTML=`<div class="empty"><div class="big">No watchlist yet</div>
@@ -631,6 +635,24 @@ async function loadWatchlist(file){
   const url=API.has?('/api/watchlist?file='+encodeURIComponent(file||'latest')):'/outputs/latest.json';
   try{const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);DATA=await r.json();renderAll();}
   catch(e){$('report').innerHTML=`<div class="empty"><div class="big">No data</div><div class="hint">${esc(e.message)}<br>${API.has?'Run a scan to begin.':'Open via the app server for live scanning.'}</div></div>`;renderHeader();}
+}
+async function autoRefresh(){
+  // Repull the latest result periodically so an open cockpit reflects new scans
+  // (yours or the cloud watcher's) without you reopening anything. Only refreshes
+  // when the data actually changed, and never mid-scan, so it won't disrupt reading.
+  if(!API.has || $('runbtn').disabled) return;
+  if(window.__view==='portfolio') return;
+  try{
+    const r=await fetch('/api/watchlist?file=latest',{cache:'no-store'});
+    if(!r.ok)return; const d=await r.json();
+    if(d&&d.generated_at&&d.generated_at!==(DATA&&DATA.generated_at)){
+      const keep=sel; DATA=d; renderAll();
+      if(DATA.watchlist&&keep>0&&keep<DATA.watchlist.length){
+        sel=keep; render(DATA.watchlist[sel]);
+        document.querySelectorAll('.row').forEach(r=>r.classList.toggle('on',+r.dataset.i===sel));}
+      toast('Updated — new scan results');
+    }
+  }catch(e){}
 }
 async function loadCalibration(){
   try{const r=await fetch('/outputs/calibration.json',{cache:'no-store'});if(!r.ok)return;const c=await r.json();
@@ -715,6 +737,7 @@ function fmtPct(v){return typeof v==='number'?`<span class="${v>=0?'up':'dn'}">$
 function fmtMoney(v){return typeof v==='number'?`<span class="${v>=0?'up':'dn'}">${v>=0?'+$':'-$'}${Math.abs(v).toFixed(0)}</span>`:'';}
 const _today=()=>new Date().toISOString().slice(0,10);
 async function showPortfolio(){
+  window.__view='portfolio';
   document.querySelectorAll('.row').forEach(r=>r.classList.remove('on'));
   let perf={positions:[],aggregate:{},benchmark:null};
   try{perf=await(await fetch('/api/portfolio/performance')).json();}catch(e){}
@@ -790,6 +813,7 @@ async function boot(){
   await loadWatchlist('latest');await loadHistory();await loadCalibration();
   if(API.has)setInterval(async()=>{try{const h=await(await fetch('/api/health')).json();
     $('led-kr').className='led '+(h.kronos?'on':'off');}catch(e){}},15000);
+  if(API.has)setInterval(autoRefresh,120000);   // pull new results every 2 min
 }
 boot();
 </script>
