@@ -229,7 +229,7 @@ ul.risks li{position:relative;padding:7px 0 7px 22px;line-height:1.55;font-size:
 ul.risks li:last-child{border-bottom:none}
 ul.risks li::before{content:"";position:absolute;left:2px;top:15px;width:9px;height:2px;background:var(--claret)}
 .tags{display:flex;gap:8px;flex-wrap:wrap}
-/* horizon filter + badges */
+/* profile rank filter + badges */
 .hfilter{display:flex;gap:6px;padding:8px 16px 10px;border-bottom:1px solid var(--rule)}
 .hf{flex:1;background:none;border:1px solid var(--rule-2);color:var(--dim);font-family:var(--sans);font-weight:700;
   font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:6px 4px;cursor:pointer;border-radius:7px;transition:.12s}
@@ -339,7 +339,7 @@ ul.why li::before{content:"▸";position:absolute;left:2px;top:6px;color:var(--c
 <script>
 const API={has:false};
 const STEPS=["Universe","Context","Screen","Forecast","Review","Reports"];
-let DATA=null, sel=0, HFILTER='all';
+let DATA=null, sel=0, PROFILE='balanced';
 const $=id=>document.getElementById(id);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
@@ -352,6 +352,8 @@ function rawProb(v){return typeof v==='number'?`${(v*100).toFixed(0)}%`:'—'}
 function metricMini(label,value,cls=''){return `<span class="mini"><span class="lab">${label}</span><span class="val ${cls}">${value}</span></span>`}
 function retCls(v){return typeof v==='number'?(v>=0?'up':'dn'):''}
 function probCls(v){return typeof v==='number'?(v>=.55?'up':(v<=.45?'dn':'')):''}
+function profileRank(it,p=PROFILE){return it.opportunity&&it.opportunity.profiles&&it.opportunity.profiles[p]?it.opportunity.profiles[p].rank:null}
+function profileScore(it,p=PROFILE){return it.opportunity&&it.opportunity.profiles&&it.opportunity.profiles[p]?it.opportunity.profiles[p].score:null}
 
 function fan(candles,current,cone){
   const med=(cone&&cone.q50&&cone.q50.length)?cone.q50.slice():(candles||[]).map(c=>c.close).filter(x=>typeof x==='number');
@@ -429,23 +431,24 @@ function renderList(){
     el.insertAdjacentHTML('beforeend',h+'</div>');
   }
   el.insertAdjacentHTML('beforeend',`<div class="listhd"><span>Watchlist · ${(DATA.watchlist||[]).length}</span><span>conv · ret · P↑</span></div>`);
-  // Horizon filter
-  const counts={low:0,medium:0,high:0};
-  (DATA.watchlist||[]).forEach(it=>{const h=it.horizon||'medium';counts[h]=(counts[h]||0)+1});
-  const lbl={all:'All',low:'Low',medium:'Med',high:'High'};
-  el.insertAdjacentHTML('beforeend',`<div class="hfilter">${['all','low','medium','high'].map(h=>
-    `<button class="hf ${HFILTER===h?'on':''}" data-h="${h}">${lbl[h]}${h!=='all'?' '+(counts[h]||0):''}</button>`).join('')}</div>`);
-  el.querySelectorAll('.hf').forEach(b=>b.onclick=()=>{HFILTER=b.dataset.h;renderList();});
+  // Risk-profile ranker: changes ordering, not inclusion.
+  const counts={conservative:0,balanced:0,aggressive:0,speculative:0};
+  (DATA.watchlist||[]).forEach(it=>{const p=(it.opportunity||{}).best_profile||'balanced';counts[p]=(counts[p]||0)+1});
+  const lbl={conservative:'Conservative',balanced:'Balanced',aggressive:'Aggressive',speculative:'Speculative'};
+  el.insertAdjacentHTML('beforeend',`<div class="hfilter">${['conservative','balanced','aggressive','speculative'].map(p=>
+    `<button class="hf ${PROFILE===p?'on':''}" data-p="${p}">${lbl[p]} ${counts[p]||0}</button>`).join('')}</div>`);
+  el.querySelectorAll('.hf').forEach(b=>b.onclick=()=>{PROFILE=b.dataset.p;sel=0;renderList();const first=orderedWatchlist()[0];if(first)render(first);});
 
-  (DATA.watchlist||[]).forEach((it,i)=>{
-    if(!(HFILTER==='all'||(it.horizon||'medium')===HFILTER))return;
+  orderedWatchlist().forEach((it,i)=>{
     const d=document.createElement('div');d.className='row fadein'+(i===sel?' on':'');
     d.style.animationDelay=(i*0.025)+'s';d.dataset.i=i;
-    d.innerHTML=`<div class="rk">${String(it.rank).padStart(2,'0')}</div>
+    const pr=profileRank(it)||it.rank;
+    const ps=profileScore(it);
+    d.innerHTML=`<div class="rk">${String(pr).padStart(2,'0')}</div>
       <div><div class="tk">${esc(it.symbol)}${it.held?' <span class="held">HELD</span>':''}</div>
       <div class="nm">${esc(it.name||'')}</div>
-      <div class="st"><span class="hbadge dir-${esc(it.direction||'long')}">${(it.direction||'long')==='short'?'SHORT':'LONG'}</span>${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(it.horizon||'med')}</span></div></div>
-      <div class="rt">${typeof it.score==='number'?`<div class="vscore" title="Vigil score">${it.score.toFixed(0)}</div>`:''}${stars(it.conviction)}
+      <div class="st"><span class="hbadge dir-${esc(it.direction||'long')}">${(it.direction||'long')==='short'?'SHORT':'LONG'}</span>${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(PROFILE)}</span></div></div>
+      <div class="rt">${typeof ps==='number'?`<div class="vscore" title="${esc(PROFILE)} profile score">${ps.toFixed(0)}</div>`:(typeof it.score==='number'?`<div class="vscore" title="Vigil blend">${it.score.toFixed(0)}</div>`:'')}${stars(it.conviction)}
         <div class="rtstats">
           ${metricMini('RET',rawPct(it.expected_return_pct),retCls(it.expected_return_pct))}
           ${metricMini('P↑',rawProb(it.prob_up),probCls(it.prob_up))}
@@ -455,6 +458,15 @@ function renderList(){
     d.onclick=()=>{sel=i;document.querySelectorAll('.row').forEach(r=>r.classList.toggle('on',+r.dataset.i===i));render(it)};
     el.appendChild(d);
   });
+}
+function orderedWatchlist(){
+  const arr=(DATA.watchlist||[]).slice();
+  arr.sort((a,b)=>{
+    const ra=profileRank(a)||999,rb=profileRank(b)||999;
+    if(ra!==rb)return ra-rb;
+    return (b.score||0)-(a.score||0);
+  });
+  return arr;
 }
 function sbar(v){v=typeof v==='number'?v:0;return `<span class="sbar"><i style="width:${Math.max(0,Math.min(100,v))}%"></i></span> ${v.toFixed?v.toFixed(0):'—'}`}
 function statTile(label,value,extra=''){return `<div class="stat"><span class="sl">${label}</span><span class="sv">${value}${extra}</span></div>`}
@@ -512,7 +524,7 @@ function render(it){
   window.CURRENT=it;
   const r=it.report||{},sc=r._scores||{};
   $('report').innerHTML=`<div class="fadein">
-   <div class="kicker">${esc((it.direction||'long').toUpperCase())} · ${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · rank ${it.rank}</div>
+   <div class="kicker">${esc((it.direction||'long').toUpperCase())} · ${esc(it.strategy_type||'')} · <span class="h-${esc(it.horizon||'medium')}" style="padding:1px 6px;border-radius:2px;color:#fff">${esc(it.horizon||'medium')} horizon</span> · ${esc(PROFILE)} rank ${profileRank(it)||it.rank}</div>
    <div class="rhd"><h1>${esc(it.symbol)}</h1><span class="co">${esc(it.name||'')}</span>
      <span class="spacer" style="flex:1"></span>
      ${API.has?`<button class="addbtn" onclick="addToPortfolio()">＋ Portfolio</button>`:''}
@@ -700,7 +712,7 @@ function renderAll(){
       <div class="hint">${API.has?'Enter a directive above and press <b>Run scan</b>. OpenAlice must be running (pnpm dev).':'Run a scan from the CLI, then reload.'}</div></div>`;
     renderHeader();return;
   }
-  sel=0;renderHeader();renderList();render(DATA.watchlist[0]);
+  sel=0;renderHeader();renderList();render(orderedWatchlist()[0]||DATA.watchlist[0]);
 }
 async function loadWatchlist(file){
   const url=API.has?('/api/watchlist?file='+encodeURIComponent(file||'latest')):'/outputs/latest.json';
