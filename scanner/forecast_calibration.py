@@ -35,13 +35,18 @@ def _clamp_prob(p):
 # Shipped default calibration (from an early walk-forward backtest). Far better
 # than Kronos's raw overconfident cone; a user's own `outputs/forecast_calibration.json`
 # (regenerate via `python -m scanner.backtest`) overrides this entirely.
+# NOTE: add_pct (mean de-bias) is intentionally 0 here. A non-zero shift measured
+# from a tiny backtest (n~20) is unreliable and was visibly INFLATING already-bullish
+# forecasts (e.g. MSFT +20%). We keep only the cone-WIDENING (sigma), which is the
+# robust, believability-improving part. Run `python -m scanner.backtest` to write a
+# real outputs/forecast_calibration.json with trustworthy, sample-backed add_pct.
 _DEFAULT_CALIBRATION = {
-    "equity":    {"20": {"add_pct": 4.83, "sigma_pct": 10.85, "n": 20}},
-    "etf":       {"20": {"add_pct": 4.11, "sigma_pct": 7.94, "n": 8}},
-    "index":     {"20": {"add_pct": 3.50, "sigma_pct": 8.50, "n": 0}},
-    "crypto":    {"20": {"add_pct": -6.21, "sigma_pct": 11.53, "n": 8}},
-    "commodity": {"20": {"add_pct": 0.00, "sigma_pct": 6.00, "n": 0}},
-    "forex":     {"20": {"add_pct": -1.01, "sigma_pct": 0.94, "n": 4}},
+    "equity":    {"20": {"add_pct": 0.0, "sigma_pct": 12.0, "n": 0}},
+    "etf":       {"20": {"add_pct": 0.0, "sigma_pct": 9.0, "n": 0}},
+    "index":     {"20": {"add_pct": 0.0, "sigma_pct": 8.5, "n": 0}},
+    "crypto":    {"20": {"add_pct": 0.0, "sigma_pct": 13.0, "n": 0}},
+    "commodity": {"20": {"add_pct": 0.0, "sigma_pct": 7.0, "n": 0}},
+    "forex":     {"20": {"add_pct": 0.0, "sigma_pct": 1.5, "n": 0}},
 }
 
 
