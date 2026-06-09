@@ -51,13 +51,19 @@ def composite(report: dict, forecast: dict | None,
             comps.append(("prob_up", _clamp(pu * 100), 0.12))
 
     # 4) Quality — Kronos-quality for price-only assets, else fundamental/technical.
+    #    The fund/tech screens are LONG-oriented (they reward strong companies and
+    #    bullish setups). For a SHORT, that's a headwind, so invert them: a short
+    #    scores higher on weak fundamentals + bearish technicals.
+    direction = report.get("direction", "long")
     kq = report.get("_kronos_quality")
     if isinstance(kq, (int, float)):
         comps.append(("kronos_quality", _clamp(kq), 0.13))
     else:
         parts = [s for s in (fund_score, tech_score) if isinstance(s, (int, float))]
         if parts:
-            comps.append(("screens", _clamp(sum(parts) / len(parts)), 0.13))
+            base = sum(parts) / len(parts)
+            val = (100 - base) if direction == "short" else base
+            comps.append(("screens", _clamp(val), 0.13))
 
     if not comps:
         return 0.0, {}
