@@ -22,48 +22,61 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 def composite(report: dict, forecast: dict | None,
               fund_score, tech_score) -> tuple[float, dict]:
-    """Return (vigil_score 0-100, breakdown). Pure function, no I/O."""
+    """Return (vigil_score 0-100, breakdown). Pure function, no I/O.
+
+    The score is DIRECTION-correct (a confident bearish read scores a short HIGH,
+    not low) and HORIZON-aware (fundamentals matter for position trades, barely for
+    a low-horizon technical trade — long or short)."""
     forecast = forecast or {}
+    direction = report.get("direction", "long")
+    horizon = report.get("horizon", "medium")
+    is_long = direction != "short"
     comps: list[tuple[str, float, float]] = []   # (name, score 0-100, weight)
 
     # 1) Analyst conviction — the holistic synthesis read.
     conv = report.get("conviction")
     if isinstance(conv, (int, float)):
-        comps.append(("conviction", _clamp(conv / 5 * 100), 0.30))
+        comps.append(("conviction", _clamp(conv / 5 * 100), 0.26))
 
-    # 2) Barrier prob-weighted R — the real edge of YOUR levels vs the path cloud.
+    # 2) Directional probability (calibrated meta, else raw) — CORRECT for the
+    #    chosen side. For a short, confidence in DOWN is (1 - prob_up).
+    mp = report.get("_meta_prob_up")
+    p = mp if isinstance(mp, (int, float)) else forecast.get("prob_up")
+    if isinstance(p, (int, float)):
+        p_dir = p if is_long else (1.0 - p)
+        comps.append(("direction_prob", _clamp(p_dir * 100), 0.18))
+
+    # 3) Barrier prob-weighted R — level-based, already side-correct (the barrier
+    #    sim uses target<entry for shorts).
     barrier = report.get("_barrier") or {}
     pr = barrier.get("prob_R")
     if isinstance(pr, (int, float)):
-        # prob_R ~[-1, +2] -> 0..100 (0 at -1, ~67 at +1, 100 at +2).
         comps.append(("barrier_R", _clamp((pr + 1) / 3 * 100), 0.22))
     pt, ps = barrier.get("p_target_first"), barrier.get("p_stop_first")
     if isinstance(pt, (int, float)) and isinstance(ps, (int, float)):
         comps.append(("barrier_edge", _clamp((pt - ps + 1) / 2 * 100), 0.10))
 
-    # 3) Calibrated probability of up (meta-model) — falls back to raw prob_up.
-    mp = report.get("_meta_prob_up")
-    if isinstance(mp, (int, float)):
-        comps.append(("meta_prob_up", _clamp(mp * 100), 0.15))
-    else:
-        pu = forecast.get("prob_up")
-        if isinstance(pu, (int, float)):
-            comps.append(("prob_up", _clamp(pu * 100), 0.12))
+    # 4) Technical alignment — confluence counts signals FOR the chosen side, so it
+    #    is already direction-correct (bearish signals for a short).
+    ta = report.get("_ta") or {}
+    conf = ta.get("confluence")
+    if isinstance(conf, (int, float)):
+        comps.append(("technical", _clamp(conf / 5.0 * 100), 0.12))
+    elif isinstance(tech_score, (int, float)):
+        comps.append(("technical", _clamp(tech_score), 0.08))
 
-    # 4) Quality — Kronos-quality for price-only assets, else fundamental/technical.
-    #    The fund/tech screens are LONG-oriented (they reward strong companies and
-    #    bullish setups). For a SHORT, that's a headwind, so invert them: a short
-    #    scores higher on weak fundamentals + bearish technicals.
-    direction = report.get("direction", "long")
+    # 5) Quality. Price-only assets -> Kronos quality. Equities -> fundamentals,
+    #    but WEIGHTED BY HORIZON: a low-horizon (technical) trade barely cares about
+    #    fundamentals (weight 0), a long-term position cares fully. For a SHORT held
+    #    long enough to be a fundamental call, weak fundamentals are the tailwind.
     kq = report.get("_kronos_quality")
     if isinstance(kq, (int, float)):
-        comps.append(("kronos_quality", _clamp(kq), 0.13))
-    else:
-        parts = [s for s in (fund_score, tech_score) if isinstance(s, (int, float))]
-        if parts:
-            base = sum(parts) / len(parts)
-            val = (100 - base) if direction == "short" else base
-            comps.append(("screens", _clamp(val), 0.13))
+        comps.append(("kronos_quality", _clamp(kq), 0.12))
+    elif isinstance(fund_score, (int, float)):
+        hz_w = {"low": 0.0, "medium": 0.5, "high": 1.0}.get(horizon, 0.5)
+        if hz_w > 0:
+            fval = fund_score if is_long else (100 - fund_score)
+            comps.append(("fundamentals", _clamp(fval), 0.12 * hz_w))
 
     if not comps:
         return 0.0, {}
