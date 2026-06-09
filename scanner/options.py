@@ -40,7 +40,10 @@ def _terminal_dist(forecast: dict) -> tuple[float, float, float] | None:
 
 async def analyze(symbol: str, forecast: dict, horizon_days: int) -> dict:
     """Fetch the chain and compute the vol edge + probability-aware option idea."""
-    from scanner import yahoo, kronos_features as KF
+    from scanner import asset_registry, yahoo, kronos_features as KF
+    spec = asset_registry.get(asset_registry.infer_from_symbol(symbol))
+    if not spec.has_options:
+        return {"has_options": False, "reason": f"{spec.label} has no supported options chain"}
     try:
         chain = await yahoo.options_chain(symbol)
     except Exception as exc:  # noqa: BLE001
@@ -59,8 +62,12 @@ async def analyze(symbol: str, forecast: dict, horizon_days: int) -> dict:
         "atm_iv_pct": round(atm_iv * 100, 1) if isinstance(atm_iv, (int, float)) else None,
         "implied_move_pct": implied_move_pct,
         "put_call_oi_ratio": chain.get("put_call_oi_ratio"),
+        "atm_open_interest": chain.get("atm_open_interest"),
+        "atm_volume": chain.get("atm_volume"),
+        "atm_spread_pct": chain.get("atm_spread_pct"),
         "expirations": chain.get("expirations"),
     }
+    out["hygiene"] = _hygiene(out, spec)
 
     # Kronos predicted move vs implied (vol edge), reusing the shared helper.
     ve = KF.vol_edge(forecast, atm_iv, horizon_days)
@@ -81,6 +88,27 @@ async def analyze(symbol: str, forecast: dict, horizon_days: int) -> dict:
 
     out["idea"] = _idea(out, prob_up)
     return out
+
+
+def _hygiene(o: dict, spec) -> dict:
+    """Basic chain usability checks before any option idea is trusted."""
+    flags = []
+    oi = o.get("atm_open_interest")
+    spread = o.get("atm_spread_pct")
+    min_oi = (spec.hygiene or {}).get("options_min_open_interest", 100)
+    if isinstance(oi, (int, float)) and oi < min_oi:
+        flags.append(f"low ATM open interest ({oi:g})")
+    if isinstance(spread, (int, float)) and spread > 12:
+        flags.append(f"wide ATM bid/ask spread ({spread:.1f}%)")
+    if not isinstance(o.get("atm_iv_pct"), (int, float)):
+        flags.append("missing ATM implied volatility")
+    if not isinstance(o.get("implied_move_pct"), (int, float)):
+        flags.append("missing straddle-implied move")
+    return {
+        "usable": not flags,
+        "flags": flags,
+        "min_atm_open_interest": min_oi,
+    }
 
 
 def _idea(o: dict, prob_up) -> str:

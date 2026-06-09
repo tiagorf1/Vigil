@@ -6,6 +6,7 @@ is. This module applies those corrections to a live forecast so the displayed
 numbers are honest:
 
   * de-bias the central return,
+  * shrink overstated return magnitudes toward zero,
   * set the cone width from the *real* error stdev (not the model's tight cloud),
   * recompute prob_up with a normal approximation (so it stops pinning to 0/100).
 
@@ -41,12 +42,12 @@ def _clamp_prob(p):
 # robust, believability-improving part. Run `python -m scanner.backtest` to write a
 # real outputs/forecast_calibration.json with trustworthy, sample-backed add_pct.
 _DEFAULT_CALIBRATION = {
-    "equity":    {"20": {"add_pct": 0.0, "sigma_pct": 12.0, "n": 0}},
-    "etf":       {"20": {"add_pct": 0.0, "sigma_pct": 9.0, "n": 0}},
-    "index":     {"20": {"add_pct": 0.0, "sigma_pct": 8.5, "n": 0}},
-    "crypto":    {"20": {"add_pct": 0.0, "sigma_pct": 13.0, "n": 0}},
-    "commodity": {"20": {"add_pct": 0.0, "sigma_pct": 7.0, "n": 0}},
-    "forex":     {"20": {"add_pct": 0.0, "sigma_pct": 1.5, "n": 0}},
+    "equity":    {"20": {"add_pct": 0.0, "sigma_pct": 12.0, "shrink_factor": 0.45, "n": 0}},
+    "etf":       {"20": {"add_pct": 0.0, "sigma_pct": 9.0, "shrink_factor": 0.50, "n": 0}},
+    "index":     {"20": {"add_pct": 0.0, "sigma_pct": 8.5, "shrink_factor": 0.50, "n": 0}},
+    "crypto":    {"20": {"add_pct": 0.0, "sigma_pct": 13.0, "shrink_factor": 0.55, "n": 0}},
+    "commodity": {"20": {"add_pct": 0.0, "sigma_pct": 7.0, "shrink_factor": 0.50, "n": 0}},
+    "forex":     {"20": {"add_pct": 0.0, "sigma_pct": 1.5, "shrink_factor": 0.45, "n": 0}},
 }
 
 
@@ -74,6 +75,7 @@ def _lookup(cal: dict, asset_class: str, horizon: int) -> dict | None:
             return None
         return {"add_pct": sum(f["add_pct"] for f in allf) / len(allf),
                 "sigma_pct": sum(f["sigma_pct"] for f in allf) / len(allf),
+                "shrink_factor": sum(f.get("shrink_factor", 1.0) for f in allf) / len(allf),
                 "n": sum(f.get("n", 0) for f in allf)}
     # nearest horizon
     hs = sorted(bucket.keys(), key=lambda h: abs(int(h) - horizon))
@@ -97,14 +99,19 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
             z = raw_exp / sigma
             fc["prob_up"] = 0.5 * (1 + math.erf(z / math.sqrt(2)))
         fc["prob_up"] = _clamp_prob(fc.get("prob_up"))
+        fc["calibration_generation"] = "uncalibrated"
         return fc
 
     add = float(factors["add_pct"])         # percentage points to add to return
     sigma = float(factors["sigma_pct"])     # true terminal stdev, in %
+    shrink = _clamp_shrink(factors.get("shrink_factor", 1.0))
     cur = fc.get("current_close")
 
     fc["raw_expected_return_pct"] = raw_exp
-    exp = raw_exp + add
+    bias_adjusted = raw_exp + add
+    exp = bias_adjusted * shrink
+    fc["bias_adjusted_expected_return_pct"] = round(bias_adjusted, 4)
+    fc["shrink_factor"] = shrink
     fc["expected_return_pct"] = round(exp, 4)
 
     if sigma > 1e-6:
@@ -116,7 +123,6 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
         fc["terminal_vol_pct"] = round(sigma, 4)
 
     if cur:
-        addfrac = add / 100.0
         model_sigma = fc.get("raw_terminal_vol_pct") or fc.get("terminal_vol_pct") or sigma
         scale = (sigma / model_sigma) if model_sigma and model_sigma > 1e-6 else 1.0
         cone = fc.get("cone") or {}
@@ -124,7 +130,9 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
         if q50 and q05 and q95 and len(q50) == len(q05) == len(q95):
             nq05, nq50, nq95 = [], [], []
             for i in range(len(q50)):
-                m = q50[i] * (1 + addfrac)
+                raw_step_ret = (q50[i] / cur - 1.0) * 100.0
+                step_ret = (raw_step_ret + add) * shrink
+                m = cur * (1 + step_ret / 100.0)
                 nq50.append(round(m, 6))
                 nq05.append(round(m + (q05[i] - q50[i]) * scale, 6))
                 nq95.append(round(m + (q95[i] - q50[i]) * scale, 6))
@@ -135,4 +143,13 @@ def apply(fc: dict, asset_class: str, horizon: int) -> dict:
 
     fc["calibrated"] = True
     fc["calibration_n"] = factors.get("n")
+    fc["calibration_generation"] = "sample_backed" if (factors.get("n") or 0) > 0 else "default_prior"
     return fc
+
+
+def _clamp_shrink(value) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return round(min(1.0, max(0.05, v)), 4)

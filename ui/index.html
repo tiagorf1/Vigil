@@ -377,6 +377,48 @@ function probLine(it){
   const band=(typeof a==='number'&&typeof b==='number')?` &nbsp;·&nbsp; 95% range <span class="${a<0?'dn':'up'}">${a>=0?'+':''}${a.toFixed(1)}%</span> → <span class="${b<0?'dn':'up'}">${b>=0?'+':''}${b.toFixed(1)}%</span>`:'';
   return `<div class="probline">${ptag(it.prob_up)}${band}</div>`;
 }
+function trackSummary(it){
+  const tr=it.track_record||{},m=tr.model||{},v=tr.vigil||{};
+  const parts=[];
+  if(m.available){
+    if(typeof m.direction_hit_rate==='number')parts.push(`model hit ${(m.direction_hit_rate*100).toFixed(0)}%`);
+    if(typeof m.cone_coverage==='number')parts.push(`cone ${(m.cone_coverage*100).toFixed(0)}%`);
+    if(m.n!=null)parts.push(`n=${m.n}`);
+  }
+  if(v.available&&typeof v.hit_rate==='number')parts.push(`Vigil paper ${(v.hit_rate*100).toFixed(0)}%`);
+  return parts.length?`<div class="probline" style="margin-top:5px;color:var(--ink)">${parts.join(' · ')}</div>`:'';
+}
+function trackRecordBlock(it){
+  const tr=it.track_record||{},m=tr.model||{},v=tr.vigil||{},c=tr.calibration||{};
+  let cells='';
+  if(m.available){
+    cells+=dcell('Model bucket',esc(m.bucket||'—'));
+    if(m.n!=null)cells+=dcell('Backtest samples',m.n);
+    if(typeof m.direction_hit_rate==='number')cells+=dcell('Direction hit',(m.direction_hit_rate*100).toFixed(0)+'%');
+    if(typeof m.cone_coverage==='number')cells+=dcell('Cone coverage',(m.cone_coverage*100).toFixed(0)+'%');
+    if(typeof m.mae_pct==='number')cells+=dcell('MAE',m.mae_pct.toFixed(1)+'%');
+    if(typeof m.r2==='number')cells+=dcell('Magnitude R²',m.r2.toFixed(2));
+    if(typeof m.shrink_factor==='number')cells+=dcell('Return shrink',(m.shrink_factor*100).toFixed(0)+'%');
+  }else{
+    cells+=dcell('Model record',esc(m.note||'No backtest scorecard yet'));
+  }
+  if(v.available){
+    cells+=dcell('Vigil paper bucket',esc(v.bucket||'—'));
+    cells+=dcell('Closed paper picks',v.closed);
+    if(typeof v.hit_rate==='number')cells+=dcell('Paper hit-rate',(v.hit_rate*100).toFixed(0)+'%');
+    if(typeof v.avg_realized_pct==='number')cells+=dcell('Avg realized',rawPct(v.avg_realized_pct));
+    if(typeof v.brier==='number')cells+=dcell('Paper Brier',v.brier.toFixed(3));
+  }else{
+    cells+=dcell('Vigil paper record',esc(v.note||'No closed paper trades yet'));
+  }
+  if(c.available){
+    if(c.n_matured!=null)cells+=dcell('Matured old picks',c.n_matured);
+    if(typeof c.brier==='number')cells+=dcell('Calibration Brier',c.brier.toFixed(3));
+  }
+  const note=(it.raw_expected_return_pct!=null&&it.shrink_factor!=null)
+    ?`<div style="color:var(--faint);font-size:12px;margin-top:8px">Raw Kronos return was ${rawPct(it.raw_expected_return_pct)}; displayed return is shrunken to ${rawPct(it.expected_return_pct)} for historical realism.</div>`:'';
+  return `<div class="block"><h2>Track record · trust but verify</h2>${dgrid(cells)}${note}</div>`;
+}
 
 function renderList(){
   const el=$('list');el.innerHTML='';
@@ -466,6 +508,7 @@ function render(it){
      ${statTile('Conviction',`${stars(it.conviction)} <small>${it.conviction}/5</small>`)}
      ${statTile('Kronos ret',pct(it.expected_return_pct))}
      ${statTile('Probability up',rawProb(it.prob_up))}
+     ${(it.track_record&&it.track_record.model&&it.track_record.model.available&&typeof it.track_record.model.direction_hit_rate==='number')?statTile('Model hit',`${(it.track_record.model.direction_hit_rate*100).toFixed(0)}%`):''}
      ${statTile('Fund score',sbar(sc.fundamental))}
      ${statTile('Tech score',sbar(sc.technical))}
    </div>
@@ -492,6 +535,8 @@ function render(it){
    </div>
    <div id="tab-data" style="display:none">
      ${probLine(it)}
+     ${trackSummary(it)}
+     ${trackRecordBlock(it)}
      ${scoreBlock(it)}
      ${barrierBlock(r)}${termBlock(r)}${kfeatBlock(r)}${kqualBlock(r)}
      ${optionsBlock(r)}${insightsBlock(r)}${peersBlock(r)}
@@ -576,6 +621,7 @@ function peersBlock(r){const p=r._peers;if(!p||!p.length)return '';
   return `<div class="block"><h2>Peers</h2><div class="tags">${p.map(s=>`<span class="badge">${esc(s)}</span>`).join('')}</div></div>`;}
 function optionsBlock(r){const o=r._options;if(!o||!o.has_options)return '';
   const edge=o.vol_edge;
+  const hy=o.hygiene||{};
   const tone=typeof edge==='number'?(edge>2?'up':(edge<-2?'dn':'')):'';
   let cells='';
   if(o.kronos_vol_pct!=null)cells+=dcell('Kronos vol',o.kronos_vol_pct.toFixed(1)+'%');
@@ -586,8 +632,12 @@ function optionsBlock(r){const o=r._options;if(!o||!o.has_options)return '';
   if(o.p_above_call_strike!=null)cells+=dcell('P(> call strike)',(o.p_above_call_strike*100).toFixed(0)+'%');
   if(o.p_below_put_strike!=null)cells+=dcell('P(< put strike)',(o.p_below_put_strike*100).toFixed(0)+'%');
   if(o.put_call_oi_ratio!=null)cells+=dcell('Put/Call OI',o.put_call_oi_ratio);
+  if(o.atm_open_interest!=null)cells+=dcell('ATM OI',o.atm_open_interest);
+  if(o.atm_spread_pct!=null)cells+=dcell('ATM spread',o.atm_spread_pct.toFixed(1)+'%');
+  cells+=dcell('Chain hygiene',hy.usable===false?'<span class="dn">caution</span>':'<span class="up">usable</span>');
+  const flags=(hy.flags&&hy.flags.length)?`<ul class="why" style="margin-top:10px">${hy.flags.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'';
   const idea=o.idea?`<div class="thesis" style="margin-top:10px">${esc(o.idea)}</div>`:'';
-  return `<div class="block"><h2>Options &amp; volatility · ${esc(o.vol_call||'')}</h2>${dgrid(cells)}${idea}</div>`;}
+  return `<div class="block"><h2>Options &amp; volatility · ${esc(o.vol_call||'')}</h2>${dgrid(cells)}${flags}${idea}</div>`;}
 function valRelBlock(r){const v=r._valuation_relative;if(!v)return '';
   const cheap=v.ratio<0.85,rich=v.ratio>1.15;
   const tone=cheap?'up':(rich?'dn':'');

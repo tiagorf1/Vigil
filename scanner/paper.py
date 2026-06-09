@@ -43,14 +43,15 @@ def log_signals(watchlist: dict, horizon_days: int) -> int:
             entry = it.get("current_close")
             if not entry:
                 continue
+            item_horizon = int(it.get("horizon_days") or horizon_days)
             rec = {
                 "id": f"{it['symbol']}|{now.strftime('%Y%m%dT%H%M%S')}",
                 "opened_at": now.isoformat(timespec="seconds"),
-                "due_at": (now + timedelta(days=int(horizon_days * 1.5))).isoformat(timespec="seconds"),
+                "due_at": (now + timedelta(days=int(item_horizon * 1.5))).isoformat(timespec="seconds"),
                 "symbol": it["symbol"],
                 "name": it.get("name"),
                 "asset_class": _ac(it),
-                "horizon_days": horizon_days,
+                "horizon_days": item_horizon,
                 "entry": entry,
                 "predicted_return_pct": it.get("expected_return_pct"),
                 "prob_up": it.get("prob_up"),
@@ -58,7 +59,10 @@ def log_signals(watchlist: dict, horizon_days: int) -> int:
                 "fund_score": it.get("fund_score"),
                 "tech_score": it.get("tech_score"),
                 "strategy": it.get("strategy_type"),
-                "calibrated": (it.get("report") or {}).get("_calibrated"),
+                "calibrated": it.get("calibrated"),
+                "calibration_n": it.get("calibration_n"),
+                "calibration_generation": it.get("calibration_generation") or "legacy_unknown",
+                "vigil_engine_version": 2,
                 "features": {k: (it.get("metrics") or {}).get(k) for k in _FEATURE_KEYS},
                 "status": "open",
             }
@@ -69,6 +73,8 @@ def log_signals(watchlist: dict, horizon_days: int) -> int:
 
 
 def _ac(item: dict) -> str:
+    if item.get("asset_class"):
+        return str(item["asset_class"]).lower()
     s = (item.get("symbol") or "").upper()
     if s.endswith("=X"):
         return "forex"
@@ -137,12 +143,16 @@ async def score() -> dict:
 def stats() -> dict:
     rows = _read()
     closed = [r for r in rows if r.get("status") == "closed"]
+    scored_closed = _primary_rows(closed)
     out = {"total": len(rows), "open": sum(1 for r in rows if r.get("status") == "open"),
-           "closed": len(closed)}
-    if closed:
-        hits = sum(1 for r in closed if r.get("direction_correct"))
-        rets = [r.get("realized_return_pct", 0) for r in closed]
-        out["hit_rate"] = round(hits / len(closed), 3)
+           "closed": len(closed), "closed_scored": len(scored_closed),
+           "legacy_closed": len(closed) - len(scored_closed)}
+    if closed and scored_closed is not closed:
+        out["note"] = "Main stats prefer sample-backed calibration-era trades; legacy/default trades are counted separately."
+    if scored_closed:
+        hits = sum(1 for r in scored_closed if r.get("direction_correct"))
+        rets = [r.get("realized_return_pct", 0) for r in scored_closed]
+        out["hit_rate"] = round(hits / len(scored_closed), 3)
         out["avg_realized_pct"] = round(sum(rets) / len(rets), 2)
         # naive equity if you took every pick equal-weight
         eq = 1.0
@@ -151,11 +161,17 @@ def stats() -> dict:
         out["cumulative_equity"] = round(eq, 4)
         # by conviction bucket — does higher conviction actually win more?
         by = {}
-        for r in closed:
+        for r in scored_closed:
             c = r.get("conviction") or 0
             by.setdefault(c, []).append(1 if r.get("direction_correct") else 0)
         out["hit_by_conviction"] = {str(k): round(sum(v) / len(v), 3) for k, v in sorted(by.items())}
     return out
+
+
+def _primary_rows(closed: list[dict]) -> list[dict]:
+    """Prefer the current, sample-backed calibration era for headline stats."""
+    sample_backed = [r for r in closed if r.get("calibration_generation") == "sample_backed"]
+    return sample_backed or closed
 
 
 def main() -> None:

@@ -120,9 +120,21 @@ async def options_chain(symbol: str) -> dict:
         exp_move = (straddle / spot * 100) if spot else None
         coi = sum(x.get("openInterest") or 0 for x in calls)
         poi = sum(x.get("openInterest") or 0 for x in puts)
+        def spread(row):
+            bid, ask = (row or {}).get("bid"), (row or {}).get("ask")
+            if not bid or not ask or ask <= 0:
+                return None
+            mid = (bid + ask) / 2
+            return (ask - bid) / mid * 100 if mid else None
+        atm_spreads = [x for x in (spread(ac), spread(ap)) if x is not None]
+        atm_oi = ((ac or {}).get("openInterest") or 0) + ((ap or {}).get("openInterest") or 0)
+        atm_volume = ((ac or {}).get("volume") or 0) + ((ap or {}).get("volume") or 0)
         return {"spot": spot, "atm_iv": atm_iv, "expected_move_pct": round(exp_move, 2) if exp_move else None,
                 "expirations": len(res.get("expirationDates", [])),
                 "call_oi": coi, "put_oi": poi,
+                "atm_open_interest": atm_oi,
+                "atm_volume": atm_volume,
+                "atm_spread_pct": round(sum(atm_spreads) / len(atm_spreads), 2) if atm_spreads else None,
                 "put_call_oi_ratio": round(poi / coi, 2) if coi else None,
                 "has_options": bool(calls or puts)}
     except (KeyError, IndexError, TypeError):

@@ -141,14 +141,18 @@ def _aggregate(records: dict, cfg) -> dict:
         n = len(recs)
         if n < 3:
             continue
-        errs = np.array(preds) - np.array(reals)           # model minus reality
+        pred_arr = np.array(preds)
+        real_arr = np.array(reals)
+        errs = pred_arr - real_arr                         # model minus reality
         bias = float(errs.mean())
-        sigma = float((np.array(reals) - np.array(preds)).std())  # residual stdev
+        sigma = float((real_arr - pred_arr).std())         # residual stdev
         mae = float(np.abs(errs).mean())
         hit_raw = float(np.mean([(p > 0) == (a > 0) for p, a in zip(preds, reals)]))
         hit_deb = float(np.mean([((p - bias) > 0) == (a > 0) for p, a in zip(preds, reals)]))
         cov = float(np.mean([r["covered"] for r in recs]))
         rho = _spearman(preds, reals)
+        r2 = _r2(pred_arr, real_arr)
+        shrink = _shrink_factor(r2, n)
 
         scorecard[f"{ac}@{H}"] = {
             "n": n,
@@ -157,12 +161,16 @@ def _aggregate(records: dict, cfg) -> dict:
             "hit_rate_raw": round(hit_raw, 3),
             "hit_rate_debiased": round(hit_deb, 3),
             "rank_corr": round(rho, 3) if rho is not None else None,
+            "r2": round(r2, 3) if r2 is not None else None,
+            "shrink_factor": round(shrink, 3),
             "model_ci95_coverage": round(cov, 3),
             "residual_sigma_pct": round(sigma * 100, 2),
         }
         calibration.setdefault(ac, {})[str(H)] = {
             "add_pct": round(-bias * 100, 4),     # add to predicted return to de-bias
             "sigma_pct": round(sigma * 100, 4),   # true terminal stdev (for cone + prob)
+            "shrink_factor": round(shrink, 4),     # pull overstated returns toward zero
+            "r2": round(r2, 4) if r2 is not None else None,
             "ci95_halfwidth_pct": round(z95 * sigma * 100, 4),
             "n": n,
         }
@@ -182,6 +190,29 @@ def _aggregate(records: dict, cfg) -> dict:
         "calibration": calibration,
     }
     return result
+
+
+def _r2(pred: np.ndarray, real: np.ndarray) -> float | None:
+    """Out-of-sample explanatory power proxy for return magnitudes."""
+    if len(pred) < 4 or float(pred.std()) == 0.0 or float(real.std()) == 0.0:
+        return None
+    corr = float(np.corrcoef(pred, real)[0, 1])
+    if not math.isfinite(corr) or corr <= 0:
+        return 0.0
+    return max(0.0, min(1.0, corr * corr))
+
+
+def _shrink_factor(r2: float | None, n: int) -> float:
+    """Convert weak historical magnitude skill into an honest return haircut.
+
+    sqrt(R²) behaves like an absolute correlation. We then damp it for tiny
+    samples so a small lucky backtest cannot authorize large headline returns.
+    """
+    if r2 is None:
+        return 0.25
+    sample_conf = n / (n + 30.0)
+    raw = math.sqrt(max(0.0, min(1.0, r2))) * sample_conf
+    return max(0.15, min(0.85, raw))
 
 
 def main() -> None:

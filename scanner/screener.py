@@ -15,7 +15,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
-from scanner import indicators
+from scanner import asset_registry, indicators
 from scanner.config import get_config
 
 logger = logging.getLogger("scanner.screener")
@@ -101,13 +101,14 @@ class Screener:
 
     async def _screen_one(self, symbol: str, asset_class: str) -> Candidate | None:
         async with self._sem:
-            c = Candidate(symbol=symbol, asset_class=asset_class)
+            spec = asset_registry.get(asset_class)
+            c = Candidate(symbol=symbol, asset_class=spec.name)
             # One OHLCV fetch drives all technicals (and crypto momentum).
             c.ohlcv = await self.client.get_ohlcv(
                 symbol, interval="1d", bars=self.cfg.default_lookback + 60)
             c.indicators = indicators.compute_all(c.ohlcv)
 
-            if asset_class in ("crypto", "index", "etf", "commodity", "forex"):
+            if spec.price_only_score:
                 self._score_fundamental_momentum(c)
             else:
                 await self._score_fundamental_equity(c)

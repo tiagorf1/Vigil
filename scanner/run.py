@@ -470,6 +470,7 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("options failed for %s: %s", cand.symbol, exc)
             return {"report": report, "forecast": fc, "sector": cand.sector,
+                    "asset_class": cand.asset_class,
                     "indicators": cand.indicators,
                     "fund_score": cand.fund_score, "tech_score": cand.tech_score}
 

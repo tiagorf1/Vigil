@@ -22,12 +22,17 @@ class WatchlistOutput:
               exits: list[dict] | None = None, benchmarks: list[dict] | None = None,
               max_per_sector: int = 3) -> dict:
         """`entries` items: {report, forecast, fund_score, tech_score, sector}."""
-        from scanner import scoring, sizing, sanity
+        from scanner import asset_registry, scoring, sizing, sanity
+        from scanner import track_record
         held = {p.get("symbol") for p in (positions or [])}
         items = []
         for e in entries:
             report = e.get("report", {})
             forecast = e.get("forecast") or {}
+            symbol = report.get("symbol")
+            horizon_days = report.get("_horizon_days")
+            asset_class = e.get("asset_class")
+            asset_spec = asset_registry.get(asset_class)
             vigil_score, score_breakdown = scoring.composite(
                 report, forecast, e.get("fund_score"), e.get("tech_score"))
             report["_score"] = vigil_score
@@ -48,18 +53,35 @@ class WatchlistOutput:
                                " (ERRORS)" if errs else "",
                                "; ".join(v["check"] + ":" + v["detail"] for v in violations[:4]))
             items.append({
-                "symbol": report.get("symbol"),
+                "symbol": symbol,
                 "name": report.get("name"),
+                "asset_class": asset_class,
+                "asset_profile": {
+                    "label": asset_spec.label,
+                    "has_fundamentals": asset_spec.has_fundamentals,
+                    "price_only_score": asset_spec.price_only_score,
+                    "has_options": asset_spec.has_options,
+                    "trades_24_7": asset_spec.trades_24_7,
+                    "risk_notes": list(asset_spec.risk_notes),
+                },
                 "score": vigil_score,
                 "score_breakdown": score_breakdown,
                 "conviction": int(report.get("conviction", 3)),
                 "horizon": report.get("horizon", "medium"),
+                "horizon_days": horizon_days,
                 "metrics": _pick_metrics(e.get("indicators") or {}),
                 "decision_shapers": _decision_shapers(
                     e.get("indicators") or {}, forecast, e.get("fund_score"), e.get("tech_score")),
+                "track_record": track_record.for_pick(symbol or "", asset_class, horizon_days),
                 "strategy_type": report.get("strategy_type", "value"),
                 "direction": report.get("direction", "long"),
                 "expected_return_pct": forecast.get("expected_return_pct"),
+                "raw_expected_return_pct": forecast.get("raw_expected_return_pct"),
+                "bias_adjusted_expected_return_pct": forecast.get("bias_adjusted_expected_return_pct"),
+                "shrink_factor": forecast.get("shrink_factor"),
+                "calibrated": forecast.get("calibrated"),
+                "calibration_n": forecast.get("calibration_n"),
+                "calibration_generation": forecast.get("calibration_generation"),
                 "prob_up": forecast.get("prob_up"),
                 "ret_q05_pct": forecast.get("ret_q05_pct"),
                 "ret_q50_pct": forecast.get("ret_q50_pct"),
