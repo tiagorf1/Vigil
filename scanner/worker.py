@@ -68,6 +68,18 @@ def health() -> dict:
             "auth_required": bool(os.environ.get("VIGIL_WORKER_TOKEN", "").strip())}
 
 
+@app.get("/result/latest")
+def latest_result(x_vigil_token: str | None = Header(None)) -> JSONResponse:
+    """The worker's most recent saved watchlist, regardless of which job made it.
+    Lets the Mac cockpit pull a result that completed while it was offline."""
+    _auth(x_vigil_token)
+    p = get_config().project_root / "outputs" / "latest.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="no result yet")
+    import json
+    return JSONResponse(json.loads(p.read_text()))
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest, x_vigil_token: str | None = Header(None)) -> dict:
     _auth(x_vigil_token)

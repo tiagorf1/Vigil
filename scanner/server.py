@@ -345,9 +345,34 @@ def list_outputs() -> dict:
     return {"outputs": items}
 
 
+def _pull_cloud_latest() -> bool:
+    """Best-effort: copy the cloud worker's most recent result to local latest.json.
+    This is what makes a scan you started and walked away from show up next time
+    you open Vigil — even if the Mac was closed when the cloud finished."""
+    cfg = get_config()
+    if not cfg.vigil_worker_url:
+        return False
+    try:
+        hdr = {"X-Vigil-Token": cfg.vigil_worker_token} if cfg.vigil_worker_token else {}
+        with httpx.Client(timeout=15, headers=hdr) as c:
+            r = c.get(f"{cfg.vigil_worker_url.rstrip('/')}/result/latest")
+        if r.status_code == 200:
+            OUTPUTS_DIR.mkdir(exist_ok=True)
+            (OUTPUTS_DIR / "latest.json").write_text(json.dumps(r.json(), default=str))
+            logger.info("Synced latest result from cloud worker")
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("cloud latest sync failed: %s", exc)
+    return False
+
+
 @app.get("/api/watchlist")
 def get_watchlist(file: str = "latest") -> JSONResponse:
     name = "latest.json" if file in ("latest", "", None) else Path(file).name
+    # When asking for 'latest' and not mid-scan, refresh from the cloud worker so
+    # results that finished while the Mac was off still appear.
+    if name == "latest.json" and not JOB["running"]:
+        _pull_cloud_latest()
     path = OUTPUTS_DIR / name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"{name} not found")
