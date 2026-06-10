@@ -1,224 +1,407 @@
-# VIGIL — Project Handoff (read this first in a fresh session)
+# Vigil Handoff — Session Brief
 
-Vigil is a personal investment-opportunity scanner. Pipeline:
-**universe → screen → Kronos forecast → LLM synthesis → ranked watchlist**, viewed
-in a browser cockpit, with a 24/7 cloud watcher that pushes Telegram signals.
-Internal package name is `scanner`; product name is **Vigil**.
+Date: 2026-06-10  
+Latest pushed commit: `d4d524b Add daily board and evidence scores`  
+Repo: `https://github.com/tiagorf1/Vigil`  
+Local path: `/Users/tiagoferreira/Scanner Project`
 
-Owner: tiagorferreira1@gmail.com · GitHub: https://github.com/tiagorf1/Vigil
-
----
-
-## 1. Architecture (where things run)
-
-- **Mac cockpit** (`/Users/tiagoferreira/Scanner Project`): the browser UI + control
-  panel (`scanner.server`, port 8080). It does NOT compute — it **forwards scans to
-  the cloud worker** (because `VIGIL_WORKER_URL` is set in `.env`).
-- **Oracle cloud box** (Ubuntu ARM, 4 OCPU/24 GB, always-on): runs the heavy work.
-  - IP `51.170.32.169`, user `ubuntu`, SSH key `~/.ssh/vigil-oracle` (has a passphrase).
-  - `vigil-worker` systemd service = job API on port `8090` (token-auth via `X-Vigil-Token`).
-  - Kronos forecasting service (started by the worker) on port `8765`, **Kronos-base on CPU**.
-- **Kronos** (`~/Kronos`): the OHLCV forecasting model. `kronos_service/` wraps it in FastAPI.
-- **Data**: Yahoo Finance (free, keyless via crumb) for OHLCV + fundamentals. **OpenAlice is
-  GONE** (deleted; `openalice_client` is an offline stub).
-- **LLM**: Gemini (`gemini-2.5-flash`) for report synthesis + the Layer-2 critic.
-
-Flow of a cockpit scan: browser → `POST /api/scan` (Mac) → `_run_remote_job` forwards to
-cloud `POST /jobs` (offline=true) → worker runs `scanner.run.run_scan` → saves
-`outputs/latest.json` on the box → Mac polls + downloads it (and `/api/watchlist?file=latest`
-also pulls the cloud's latest on open, so results survive the Mac being closed).
+This handoff is intentionally narrow. It covers the work from this session and
+what the next Codex session should do next.
 
 ---
 
-## 2. Cloud ops (how to update / run)
+## 1. User Goal This Session
 
-SSH in: `ssh -i ~/.ssh/vigil-oracle ubuntu@51.170.32.169`
+The user wanted Vigil to become more believable without becoming overprocessed.
+Core themes:
 
-Update the box (ONLY when no scan is running — restarting kills an in-flight job):
+- Fund/tech scores felt fake because too many names clustered at values like
+  `100` or `40`.
+- The UI should rank opportunities by risk profile, not act as a hard selector.
+- Counter-trend trades should not be killed automatically; they may be the best
+  asymmetric ideas.
+- Scheduled scans should not overwrite each other. If US, Europe, crypto, FX,
+  commodities run as separate buckets, earlier buckets must survive in one board.
+- Accumulation must be daily only. Tomorrow starts fresh.
+- Prepare the system for more asset types and later options work, but do not
+  blow up the overnight scan before it can run.
+
+High-level answer: we made scores more honest and made bucket scans accumulate
+into a same-day combined board.
+
+---
+
+## 2. What Was Built
+
+### A. Daily Board Aggregator
+
+New file:
+- `scanner/daily_board.py`
+
+Behavior:
+- Every scheduled bucket still writes its normal timestamped watchlist.
+- `scanner.signals` now calls `daily_board.ingest(path, spec.label)` after each
+  bucket finishes.
+- The bucket result is copied into:
+  - `outputs/daily/YYYY-MM-DD/<bucket>.json`
+- A combined board is rebuilt at:
+  - `outputs/daily/YYYY-MM-DD/combined.json`
+- `outputs/latest.json` is rewritten from today’s combined board.
+
+Important design choice:
+- Buckets are overwritten by bucket name, not appended. Re-running “US bucket”
+  replaces today’s US bucket instead of duplicating stale ideas.
+- Tomorrow uses a different folder, so yesterday cannot leak into tomorrow.
+
+Why this matters:
+- Before this, each bucket scan overwrote `outputs/latest.json`.
+- Now `global-liquid` can finish in stages, and the UI sees the combined day board.
+- US results will not hide Europe/FX/crypto/commodities.
+
+### B. Evidence Scores For Fund/Tech
+
+New file:
+- `scanner/evidence_scores.py`
+
+Wired in:
+- `scanner/run.py`
+- `scanner/output.py`
+- `ui/index.html`
+
+Behavior:
+- After screening and data-quality cleanup, survivors get evidence-normalized
+  scores.
+- Raw scores are preserved as:
+  - `raw_fund_score`
+  - `raw_tech_score`
+- Displayed scores become:
+  - raw score blended with same-scan peer percentile
+  - plus data confidence
+  - gently pulled toward neutral when evidence is thin
+
+Why this matters:
+- A raw `100/100` no longer displays as fake certainty.
+- A `40/100` no longer means “bad” in isolation; the UI can show whether it was
+  weak vs today’s peers or just a coarse bucket.
+- This keeps the user’s “ranker, not selector” philosophy intact.
+
+### C. UI Updates
+
+Changed:
+- `ui/index.html`
+
+Visible effects:
+- Watchlist rows show `source_bucket` when loaded from a combined daily board.
+- “Fund screen” / “Tech screen” language is now “Fund evidence” / “Tech evidence.”
+- Data tab includes “Evidence score calibration”:
+  - evidence score
+  - raw score
+  - peer percentile
+  - data confidence
+- Header pill shows combined board status, e.g. `combined 4 buckets`.
+
+### D. Tests
+
+New tests:
+- `tests/test_daily_board.py`
+- `tests/test_evidence_scores.py`
+
+Verification run:
+
 ```bash
-cd ~/Vigil && git pull && sudo systemctl restart vigil-worker
+PYTHONPATH=. python3 -m pytest -q
 ```
-Services & timers:
-- `vigil-worker.service` — job API (always on).
-- `vigil-bot.service` — interactive Telegram command bot (needs Telegram tokens).
-- `vigil-signals.timer` — **00:00 London** pre-market sweep → runs `SIGNAL_MARKETS`.
-- `vigil-portfolio.timer` — midday + afternoon portfolio guard.
-Enable: `sudo systemctl enable --now vigil-signals.timer vigil-portfolio.timer`
-Check: `systemctl list-timers 'vigil-*'` · logs: `journalctl -u vigil-worker -f`
-Health from Mac: `curl -s http://51.170.32.169:8090/health` → `{"status":"ok",...}`
 
-Firewall gotchas (already handled by `deploy/setup-oracle.sh`): Oracle needs BOTH a cloud
-Security-List ingress rule for tcp/8090 AND the box's local iptables opened (Oracle Ubuntu
-rejects non-22 by default → "No route to host").
+Result:
 
-`deploy/setup-oracle.sh` is the one-shot provisioner (ARM-aware torch, clones repo+Kronos,
-venv, .env, systemd units, firewall, auto-generates `VIGIL_WORKER_TOKEN`).
+```text
+105 passed, 1 skipped, 1 warning
+```
+
+The warning is an existing pandas runtime warning in a screener test, not caused
+by this session.
 
 ---
 
-## 3. Config (`.env`; template `.env.example`)
+## 3. Files Changed
 
-Key vars: `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, `KRONOS_MODEL=NeoQuasar/Kronos-base`,
-`KRONOS_DEVICE=cpu` (cloud), `KRONOS_MC_PATHS=24`, `KRONOS_SCREEN_PATHS=6` (2-stage),
-`KRONOS_HORIZONS=10,30,60` (auto-selected), `DEFAULT_PRED_LEN=60` (fallback only),
-`KRONOS_HTTP_TIMEOUT=3600` (base on CPU is slow), `VIGIL_WORKER_URL`/`VIGIL_WORKER_TOKEN`
-(Mac→cloud), `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `SIGNAL_MARKETS`,
-`VIGIL_ACCOUNT_EQUITY` (0 = weights only), `SIZING_KELLY_FRACTION=0.5`, `SIZING_TARGET_VOL=0.15`,
-`VIGIL_START_OPENALICE=false`.
+New:
+- `scanner/daily_board.py`
+- `scanner/evidence_scores.py`
+- `tests/test_daily_board.py`
+- `tests/test_evidence_scores.py`
 
-**SIGNAL_MARKETS** = comma list the watcher walks in order. Tokens:
-`portfolio` (your holdings → sell alerts), `europe`/`us`/`world` (index level),
-`global-liquid` (ETF + FX + commodity + crypto baskets), `crypto`, `forex`, `commodities`,
-or any named index (`ftse 100`, `dax`, `euro stoxx 50`). Recommended:
-`SIGNAL_MARKETS=europe,crypto,forex,us` (EU indices first, US stocks last; portfolio has
-its own timer).
+Modified:
+- `scanner/run.py`
+- `scanner/signals.py`
+- `scanner/output.py`
+- `ui/index.html`
+- `HANDOFF.md`
 
----
-
-## 4. Module / function log (`scanner/`)
-
-- **config.py** — `Config` dataclass + `get_config()` (lru-cached). All env access here.
-- **run.py** — CLI + pipeline. `run_scan(args)` orchestrates; `build_entry(cand)` builds one
-  pick (picks side from forecast, TA levels, horizon select, barrier, kronos features, meta,
-  insights/peers, options); `preflight()`; 2-stage forecasting; single-asset full-tilt.
-- **server.py** — FastAPI cockpit. `/api/scan`, `/api/watchlist`, `/api/health`,
-  `/api/outputs`, `/api/calibrate`, `/api/portfolio/*`. `_run_remote_job` (forward to cloud),
-  `_pull_cloud_latest` (persistence). Serves `ui/index.html`.
-- **worker.py** — remote job API. `POST /jobs`, `GET /jobs/{id}`, `/jobs/{id}/result`,
-  `/result/latest`, `/health`, `_auth` (token).
-- **universe.py** — `UniverseBuilder.build`; `NAMED_INDEX` + `_match_named_index`
-  (FTSE/DAX/Euro Stoxx/Nikkei/etc.); `coingecko_top` (crypto top-N, keyless); seed lists.
-- **screener.py** — `Screener.screen`; `Candidate` (fund_score, tech_score,
-  **tech_short_score**, combined/short_combined/**best_combined**); `_score_technical`
-  (bullish + bearish), `_score_fundamental_equity/_momentum`.
-- **indicators.py** — RSI/MACD/SMA/ATR/BBands; `compute_all`, `ohlcv_to_frame`.
-- **fundamentals.py** — `fetch` (Yahoo quoteSummary crumb + optional FMP); `score`
-  (8-bucket methodology + 18% framework blend); `_enrich_frameworks`.
-- **factor_models.py** — `piotroski`, `greenblatt`, `graham`, `evaluate` (0-100 framework score).
-- **entry_exit.py** — `analyze(ohlcv, direction)` → LONG **or** SHORT levels (stop/entry/
-  target, RR, confluence, setup, trend, trail_stop); `_adx`, `_swings`.
-- **horizon.py** — `select(forecasts_by_h, ta, horizons)` → operative horizon (shortest
-  confident + forecast-agrees-with-trend), horizon_class, term_structure.
-- **kronos_client.py** — `KronosClient.forecast_batch/forecast/ensure_service_running`.
-- **kronos_features.py** — `barrier_probabilities` (P(target/stop first), **expected_r** =
-  prob-weighted R-multiple, NOT a probability), `vol_edge`, `kronos_quality`.
-- **forecast_calibration.py** — `apply(fc, asset_class, horizon)` de-bias + widen cone +
-  **de-pin prob_up** (clamp [0.02,0.98]); `_DEFAULT_CALIBRATION` (shipped, add_pct=0).
-- **scoring.py** — `composite(report, forecast, fund, tech)` → Vigil score, **direction- and
-  horizon-aware** (shorts use 1-prob_up; fundamentals weighted by horizon).
-- **sizing.py** — `kelly_fraction`, `suggest`, `from_pick`; binding ∈ {no_edge, kelly,
-  vol_target, **max_position**}.
-- **sanity.py** — `audit(report, forecast)` → Layer-1 deterministic invariant violations.
-- **report_generator.py** — `ReportGenerator.generate` (LLM report, long/short framed);
-  `critique` (**Layer-2 LLM critic** of computed numbers); `_call_llm/_call_gemini` (schema-opt).
-- **options.py** — `analyze` (Kronos vol vs implied, P(>strike), vol-play idea).
-- **yahoo.py** — `intraday`, `fundamentals_timeseries` (keyless), `options_chain`,
-  `insights`, `recommendations`.
-- **output.py** — `WatchlistOutput.build/save/to_markdown`; ranks by Vigil score; attaches
-  sizing + runs the sanity audit per pick.
-- **regime.py** — `classify`/`detect` (VIX risk-on/off banner).
-- **dataquality.py** — `analyze` (quarantine insufficient/penny/illiquid/split/flat).
-- **portfolio.py** — `PortfolioStore` (add/remove/list/performance); your paper book.
-- **signals.py** — `run_signals`, `portfolio_sell_check` (the watcher; Telegram).
-- **notify.py** — `TelegramNotifier`. **names.py** — symbol → name/validity.
-- **market_data.py** — `fallback_ohlcv` (Yahoo chart). **index_components.py** — US index
-  expansion. **meta_model.py** — `predict_proba` (untrained logistic). **paper.py** — ledger.
-- **calibrate.py** — self-score matured picks. **backtest.py** — walk-forward forecast CV →
-  `forecast_calibration.json`. **strategy_backtest.py** — TA equity-curve backtest.
-- **intraday.py** — intraday short-horizon Kronos. **telegram_bot.py** — command bot.
-- **cache.py** — `DiskCache`. **openalice_client.py** — offline stub (OpenAlice removed).
-- **kronos_service/predictor.py** — `KronosForecaster` (`forecast_batch`, `_summarise`
-  → cone, quantiles, features); **main.py** — `/forecast`, `/forecast_batch`, `/health`.
-
-Run modes: cockpit `python -m scanner.server` (or `Vigil.command`) · CLI
-`python -m scanner.run "AAPL MSFT" --offline` · watcher `python -m scanner.signals europe`
-· backtest `python -m scanner.backtest` · strategy backtest `python -m scanner.strategy_backtest AAPL`
-· intraday `python -m scanner.intraday AAPL --interval 5m`. Tests: `pytest -q`
-(105 pass, 1 skipped as of 2026-06-10).
+Untracked and intentionally untouched:
+- `worker_token.rtf`
 
 ---
 
-## 5. How a pick is built (the believability chain)
+## 4. Deployment State
 
-1. Universe → screen (fund + tech, **both long & short merit**) → top survivors.
-2. `evidence_scores.apply_to_candidates`: raw fund/tech → evidence score by same-scan
-   peer rank + data confidence, preserving raw scores for audit.
-3. 2-stage Kronos: cheap sweep (6 paths) → refine top buffer (24 paths) at 10/30/60d.
-4. `forecast_calibration.apply`: widen cone to real error stdev, **de-pin prob_up**.
-5. `entry_exit.analyze`: side chosen from the forecast → LONG/SHORT structural levels.
-6. `horizon.select`: operative horizon (shortest confident + agrees with trend).
-7. `kronos_features.barrier_probabilities`: P(target before stop), expected_r, on YOUR levels.
-8. LLM report (`generate`, long/short framed) + `meta_model` prob.
-9. `scoring.composite`: direction/horizon-aware Vigil blend; counter-trend is a trust flag,
-   not an automatic opportunity penalty.
-10. `opportunity_ranker`: conservative/balanced/aggressive/speculative rankings.
-11. `sizing.from_pick`: fractional-Kelly capped by vol target / max-position, with trust haircut.
-12. `sanity.audit` (Layer 1) + `critique` (Layer 2) check coherence; flags shown in UI.
+Commit was pushed to `origin/main`:
 
----
+```bash
+git push origin main
+```
 
-## 6. CHANGE-LOG (this build cycle)
+Cloud deploy commands for Oracle:
 
-- Model → **Kronos-base** (largest public; large=499M is unreleased).
-- **Composite Vigil score** as the ranking key; surfaced TA setup, meta prob, Yahoo
-  insights/peers, Kronos features/quality, barrier, term-structure, frameworks, sizing.
-- **Theory fundamentals** (Piotroski/Greenblatt/Graham) blended into the fundamental score.
-- **Options/vol module**; **regime** (VIX); **data-quality guardrails**.
-- **Backtests**: walk-forward forecast CV + TA strategy equity-curve.
-- **Longs AND shorts**: direction chosen from forecast; first-class short sourcing in the
-  screener; short LLM framing; direction+horizon-aware scoring.
-- **Two safety nets**: Layer-1 deterministic invariants (`sanity.py`) + Layer-2 LLM critic.
-- **Believability**: prob_up de-pinned + clamped; cone widened via shipped calibration;
-  uniform mean de-bias (add_pct) disabled (was inflating bullish forecasts).
-- **Evidence scores**: raw fund/tech screen values are reshaped with same-scan peer rank
-  and data confidence, so saturated raw 100s/40s no longer display as fake precision.
-- **Daily board aggregator**: scheduled bucket scans write `outputs/daily/YYYY-MM-DD/*.json`
-  and rebuild `combined.json`/`latest.json` from today's buckets only. Tomorrow is a fresh board.
-- **Cloud**: Oracle worker + persistence (`/result/latest` + auto-pull); configurable
-  `KRONOS_HTTP_TIMEOUT` (3600); pre-market sweep + portfolio-guard timers (London tz).
-- **UI redesign** (Fraunces/Hanken/JetBrains Mono, minimal); removed obsolete controls +
-  dead "Send to Alice"; Europe/named-index awareness + nav chips; auto-refresh; tag fixes.
-- Critic-found bug fixes: prob_up 0/100, sizing `max_position` binding, short P(win)
-  inversion, counter-trend mislabel (→ mean_reversion), `prob_R`→`expected_r` rename.
+```bash
+cd ~/Vigil
+git pull
+source .venv/bin/activate
+sudo systemctl restart vigil-worker
+```
 
----
+If delaying the scheduled midnight scan and running manually:
 
-## 7. KNOWN ISSUES / believability caveats (work most needed here)
+```bash
+sudo systemctl stop vigil-signals.timer
+cd ~/Vigil
+source .venv/bin/activate
+python -m scanner.signals global-liquid
+sudo systemctl start vigil-signals.timer
+```
 
-1. **Forecast magnitudes still large & prob_up still high.** Kronos overstates directional
-   magnitude; e.g. +15-20% medium-horizon moves, prob_up ~89-98%. Mitigated (de-pin, wider
-   cone, add_pct=0) but NOT solved. **Next:** shrink expected return toward 0/drift
-   (regularization), and run `scanner.backtest` on the box to get a real, sample-backed
-   `forecast_calibration.json` (re-enables trustworthy bias correction).
-2. **3 separate horizon forecasts** (10/30/60) = inconsistent paths + 3× the compute. **Next:**
-   run ONE 60-step forecast and slice it to 10/30/60 (consistent + ~3× faster).
-3. **Base-on-CPU is slow** (~30-40 min for a single full-tilt name; index sweeps hours).
-   Timeout raised to 3600. **Next:** GPU box, or the slicing win, or fewer paths.
-4. **Counter-trend trades are common** (Kronos vs price trend) — handled as
-   mean-reversion + trust/profile flag, not buried. Watch that they don't dominate the
-   aggressive/speculative boards without level-based edge.
-5. **European = index level only** (no European single-stock constituents).
-6. **No free-text theme search** (OpenAlice gone). Only tickers / known index names work.
-7. **meta_model untrained** — needs the paper ledger to mature.
+Check timers:
+
+```bash
+systemctl list-timers 'vigil-*'
+```
+
+Check worker logs:
+
+```bash
+journalctl -u vigil-worker -f
+```
+
+If `python` fails on Oracle, use the venv and `python`, or system `python3` only
+after dependencies are installed. The known good pattern is:
+
+```bash
+cd ~/Vigil
+source .venv/bin/activate
+python -m scanner.signals global-liquid
+```
 
 ---
 
-## 8. WHAT'S NEXT (prioritized)
+## 5. Current Automation / Buckets
 
-1. **Believability:** expected-return shrinkage + run a real backtest for calibration.
-2. **Score fidelity:** sector-relative factor scoring across the full candidate universe,
-   not only the final survivors; then backtest which factor weights actually help.
-3. **Efficiency:** single-forecast multi-horizon slicing.
-4. **Free-text theme search** (must NOT preempt the portfolio guard).
-5. **Train the meta-model** once the ledger has matured picks; gate "trust" on backtest.
-6. First-class European single-stock universes (constituent lists).
-7. GPU option for Kronos-base (fast interactive scans).
+Known `SIGNAL_MARKETS` profile from the code:
+
+`global-liquid` runs four buckets:
+
+1. Global liquid index ETFs:
+   - `SPY QQQ DIA IWM EWU FEZ EWG EWQ EWP EWI EWJ MCHI FXI EWY EWT INDA`
+2. Liquid commodity ETFs:
+   - `GLD SLV USO UNG CPER PPLT PALL DBA CORN WEAT`
+3. Top FX pairs:
+   - `EURUSD=X GBPUSD=X USDJPY=X USDCHF=X USDCAD=X AUDUSD=X NZDUSD=X EURJPY=X GBPJPY=X EURGBP=X`
+4. Crypto majors:
+   - `BTCUSD ETHUSD SOLUSD BNBUSD XRPUSD ADAUSD AVAXUSD DOTUSD LINKUSD DOGEUSD`
+
+New behavior:
+- Each bucket lands separately under today’s folder.
+- The UI/latest result becomes the combined daily board.
+- Tomorrow starts as a new folder automatically.
 
 ---
 
-## 9. SAFETY / secrets
+## 6. Rationale
 
-- Secrets live ONLY in `.env` (gitignored): `GEMINI_API_KEY`, `TELEGRAM_*`,
-  `VIGIL_WORKER_TOKEN`. Never commit them. The repo is **public** on GitHub — keep it clean.
-- Vigil is advisory: it never executes trades. `--stage-orders` only STAGES for human review.
-- A second agent ("Codex") sometimes edits in parallel — `git pull --rebase` before pushing.
+### Why not penalize counter-trend trades?
+
+Because the user is right: counter-trend can be where the gold is. The system
+should identify the condition, not bury it. Counter-trend is now better treated
+as a trust/profile signal:
+
+- conservative profile: usually dislikes it
+- aggressive/speculative profiles: may like it if levels and payoff are good
+
+### Why evidence scores instead of “real truth” fund/tech scores?
+
+A single 0-100 score is dangerous if it pretends to be truth. The better move is:
+
+- keep the raw score
+- show where it ranks against peers scanned today
+- show confidence in the underlying data
+- avoid hard filtering unless the data is truly broken
+
+This answers the user’s concern about “killing it in the crib.” Thin data should
+reduce confidence, not delete ideas.
+
+### Why same-day accumulation?
+
+The scan runs in buckets because a single giant scan is slow and fragile. But a
+bucketed runner must not make the latest bucket look like the whole market.
+
+The daily board gives both:
+
+- bucket-level completion
+- one combined board for the day
+
+And because it is date-scoped, there is no stale accumulation into tomorrow.
+
+---
+
+## 7. What Is Still Weak
+
+Most important weaknesses:
+
+1. Forecast magnitudes are still too large.
+   - Expected-return shrinkage exists conceptually, but the real backtest still
+     needs to be run on the cloud box to produce trustworthy sample-backed
+     calibration.
+
+2. Fund/tech evidence scoring is survivor-only.
+   - It currently reshapes scores among cleaned survivors, not across the full
+     candidate universe.
+   - Better next step: compute evidence percentiles across all candidates before
+     final survivor selection.
+
+3. Technical score is still indicator-bucket based.
+   - It should become a continuous setup score:
+     trend, momentum, reversal, volatility compression, relative strength,
+     drawdown, distance from key averages, and volume confirmation.
+
+4. Fundamental score is better than before, but not yet sector-native enough.
+   - It needs sector-relative valuation/profitability/growth/liquidity.
+   - Banks, insurers, REITs, commodity producers, and software companies should
+     not be judged by the same generic formula.
+
+5. Daily combined board ranking may need bucket caps.
+   - The combiner dedupes and reranks, but it does not yet enforce “max N per
+     bucket” by default.
+   - If one bucket floods the board, add a config setting or call `ingest(...,
+     max_per_bucket=N)`.
+
+6. Cloud backtest/calibration is not done yet.
+   - This is still the biggest trust upgrade.
+
+---
+
+## 8. Recommended Next Session Plan
+
+Priority order:
+
+1. Run/deploy this commit on Oracle and confirm `global-liquid` produces:
+   - `outputs/daily/YYYY-MM-DD/*.json`
+   - `outputs/daily/YYYY-MM-DD/combined.json`
+   - combined `outputs/latest.json`
+
+2. Run real backtest on Oracle:
+
+   ```bash
+   cd ~/Vigil
+   source .venv/bin/activate
+   python -m scanner.backtest --horizons 10 30 60 --cuts 8 --lookback 180 --paths 12
+   ```
+
+   If too slow:
+
+   ```bash
+   python -m scanner.backtest --symbols AAPL MSFT SPY QQQ GLD BTCUSD ETHUSD EURUSD=X --horizons 10 30 --cuts 4 --lookback 180 --paths 8
+   ```
+
+3. Add true expected-return shrinkage from backtest R² / realized error.
+   - Goal: Kronos headline returns stop screaming `+15%` unless the model has
+     earned that magnitude historically.
+
+4. Upgrade fund/tech scoring properly:
+   - sector-relative fundamental percentiles
+   - continuous technical setup scores
+   - factor-level explanations
+   - confidence shown separately from opportunity
+
+5. Add bucket caps / board sections if today’s combined board becomes dominated
+   by one bucket.
+
+6. Then resume options work.
+   - Options should use the same philosophy: expected payoff, liquidity hygiene,
+     IV vs forecast vol, spread/slippage, and sizing, not “buy calls because
+     bullish.”
+
+---
+
+## 9. Source Direction For Better Scores
+
+Use these as the source backbone for the next fund/tech scoring pass:
+
+- CFA Institute, Financial Analysis Techniques:
+  https://www.cfainstitute.org/insights/professional-learning/refresher-readings/2026/financial-analysis-techniques
+  - Use for ratios, liquidity, solvency, profitability, activity, DuPont logic,
+    and the warning that ratios must be interpreted in context.
+
+- CFA Institute, Integration of Financial Statement Analysis Techniques:
+  https://www.cfainstitute.org/insights/professional-learning/refresher-readings/2026/integration-financial-statement-analysis-techniques
+  - Use for comparability, accounting choices, quality of data, and sector/context
+    dependence.
+
+- CFA Institute, Introduction to Financial Statement Analysis:
+  https://www.cfainstitute.org/insights/professional-learning/refresher-readings/2026/introduction-financial-statement-analysis
+  - Use for the full statement-analysis framework and why notes, filings, and
+    management commentary matter.
+
+- Fama and French, A Five-Factor Asset Pricing Model:
+  https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2287202
+  - Use for factor direction: value, profitability, and investment behavior have
+    evidence in average returns.
+
+- Kenneth French Data Library, Fama/French 5 Factors:
+  https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library/f-f_5_factors_2x3.html
+  - Use for factor definitions and eventual factor benchmarking.
+
+- Jegadeesh and Titman, Returns to Buying Winners and Selling Losers:
+  https://www.bauer.uh.edu/rsusmel/phd/jegadeesh-titman93.pdf
+  - Use for cross-sectional momentum evidence.
+
+- Brock, Lakonishok, and LeBaron, Simple Technical Trading Rules:
+  https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.1992.tb04681.x
+  - Use cautiously for moving-average/trading-rule evidence. Account for costs
+    and out-of-sample fragility.
+
+- Lo, Mamaysky, and Wang, Foundations of Technical Analysis:
+  https://papers.ssrn.com/sol3/papers.cfm?abstract_id=228099
+  - Use for the idea that technical patterns should be algorithmic and statistically
+    tested, not visually hand-waved.
+
+Working principle:
+- Fundamentals should score economic quality, valuation, growth, balance-sheet
+  strength, revisions, and sector context.
+- Technicals should score setup quality, not “chart vibes.”
+- Backtests decide weights. Human logic proposes features; realized results earn
+  the right to move ranking/sizing.
+
+---
+
+## 10. Mental Model For The Next Agent
+
+The user is not asking for a conservative filter. They want a ranker that can
+surface aggressive, asymmetric opportunities without pretending certainty.
+
+Do:
+- preserve raw values
+- show confidence separately
+- rank by profile
+- treat counter-trend as information
+- let backtests earn trust
+- keep the UI honest about what is measured vs inferred
+
+Do not:
+- bury new ideas just because the ledger is young
+- let one bucket overwrite the rest
+- call a score “truth”
+- hard-penalize reversals without checking payoff/levels
+- add complexity that cannot affect tomorrow’s scan
+
+The best next win is still believability:
+real cloud backtest → sample-backed calibration → expected-return shrinkage →
+cleaner fund/tech factor scores.
