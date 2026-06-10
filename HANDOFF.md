@@ -133,22 +133,27 @@ its own timer).
 Run modes: cockpit `python -m scanner.server` (or `Vigil.command`) · CLI
 `python -m scanner.run "AAPL MSFT" --offline` · watcher `python -m scanner.signals europe`
 · backtest `python -m scanner.backtest` · strategy backtest `python -m scanner.strategy_backtest AAPL`
-· intraday `python -m scanner.intraday AAPL --interval 5m`. Tests: `pytest -q` (84 pass).
+· intraday `python -m scanner.intraday AAPL --interval 5m`. Tests: `pytest -q`
+(105 pass, 1 skipped as of 2026-06-10).
 
 ---
 
 ## 5. How a pick is built (the believability chain)
 
 1. Universe → screen (fund + tech, **both long & short merit**) → top survivors.
-2. 2-stage Kronos: cheap sweep (6 paths) → refine top buffer (24 paths) at 10/30/60d.
-3. `forecast_calibration.apply`: widen cone to real error stdev, **de-pin prob_up**.
-4. `entry_exit.analyze`: side chosen from the forecast → LONG/SHORT structural levels.
-5. `horizon.select`: operative horizon (shortest confident + agrees with trend).
-6. `kronos_features.barrier_probabilities`: P(target before stop), expected_r, on YOUR levels.
-7. LLM report (`generate`, long/short framed) + `meta_model` prob.
-8. `scoring.composite`: direction/horizon-aware Vigil score; counter-trend −30%.
-9. `sizing.from_pick`: fractional-Kelly capped by vol target / max-position.
-10. `sanity.audit` (Layer 1) + `critique` (Layer 2) check coherence; flags shown in UI.
+2. `evidence_scores.apply_to_candidates`: raw fund/tech → evidence score by same-scan
+   peer rank + data confidence, preserving raw scores for audit.
+3. 2-stage Kronos: cheap sweep (6 paths) → refine top buffer (24 paths) at 10/30/60d.
+4. `forecast_calibration.apply`: widen cone to real error stdev, **de-pin prob_up**.
+5. `entry_exit.analyze`: side chosen from the forecast → LONG/SHORT structural levels.
+6. `horizon.select`: operative horizon (shortest confident + agrees with trend).
+7. `kronos_features.barrier_probabilities`: P(target before stop), expected_r, on YOUR levels.
+8. LLM report (`generate`, long/short framed) + `meta_model` prob.
+9. `scoring.composite`: direction/horizon-aware Vigil blend; counter-trend is a trust flag,
+   not an automatic opportunity penalty.
+10. `opportunity_ranker`: conservative/balanced/aggressive/speculative rankings.
+11. `sizing.from_pick`: fractional-Kelly capped by vol target / max-position, with trust haircut.
+12. `sanity.audit` (Layer 1) + `critique` (Layer 2) check coherence; flags shown in UI.
 
 ---
 
@@ -165,12 +170,16 @@ Run modes: cockpit `python -m scanner.server` (or `Vigil.command`) · CLI
 - **Two safety nets**: Layer-1 deterministic invariants (`sanity.py`) + Layer-2 LLM critic.
 - **Believability**: prob_up de-pinned + clamped; cone widened via shipped calibration;
   uniform mean de-bias (add_pct) disabled (was inflating bullish forecasts).
+- **Evidence scores**: raw fund/tech screen values are reshaped with same-scan peer rank
+  and data confidence, so saturated raw 100s/40s no longer display as fake precision.
+- **Daily board aggregator**: scheduled bucket scans write `outputs/daily/YYYY-MM-DD/*.json`
+  and rebuild `combined.json`/`latest.json` from today's buckets only. Tomorrow is a fresh board.
 - **Cloud**: Oracle worker + persistence (`/result/latest` + auto-pull); configurable
   `KRONOS_HTTP_TIMEOUT` (3600); pre-market sweep + portfolio-guard timers (London tz).
 - **UI redesign** (Fraunces/Hanken/JetBrains Mono, minimal); removed obsolete controls +
   dead "Send to Alice"; Europe/named-index awareness + nav chips; auto-refresh; tag fixes.
-- Critic-found bug fixes: prob_up 0/100, sizing `max_position` binding, counter-trend
-  mislabel (→ mean_reversion), `prob_R`→`expected_r` rename.
+- Critic-found bug fixes: prob_up 0/100, sizing `max_position` binding, short P(win)
+  inversion, counter-trend mislabel (→ mean_reversion), `prob_R`→`expected_r` rename.
 
 ---
 
@@ -185,8 +194,9 @@ Run modes: cockpit `python -m scanner.server` (or `Vigil.command`) · CLI
    run ONE 60-step forecast and slice it to 10/30/60 (consistent + ~3× faster).
 3. **Base-on-CPU is slow** (~30-40 min for a single full-tilt name; index sweeps hours).
    Timeout raised to 3600. **Next:** GPU box, or the slicing win, or fewer paths.
-4. **Counter-trend trades are common** (Kronos vs price trend) — handled (mean_reversion
-   label + −30% penalty + tag), but watch that they don't dominate the watchlist.
+4. **Counter-trend trades are common** (Kronos vs price trend) — handled as
+   mean-reversion + trust/profile flag, not buried. Watch that they don't dominate the
+   aggressive/speculative boards without level-based edge.
 5. **European = index level only** (no European single-stock constituents).
 6. **No free-text theme search** (OpenAlice gone). Only tickers / known index names work.
 7. **meta_model untrained** — needs the paper ledger to mature.
@@ -196,11 +206,13 @@ Run modes: cockpit `python -m scanner.server` (or `Vigil.command`) · CLI
 ## 8. WHAT'S NEXT (prioritized)
 
 1. **Believability:** expected-return shrinkage + run a real backtest for calibration.
-2. **Efficiency:** single-forecast multi-horizon slicing.
-3. **Free-text theme search** (must NOT preempt the portfolio guard).
-4. **Train the meta-model** once the ledger has matured picks; gate "trust" on backtest.
-5. First-class European single-stock universes (constituent lists).
-6. GPU option for Kronos-base (fast interactive scans).
+2. **Score fidelity:** sector-relative factor scoring across the full candidate universe,
+   not only the final survivors; then backtest which factor weights actually help.
+3. **Efficiency:** single-forecast multi-horizon slicing.
+4. **Free-text theme search** (must NOT preempt the portfolio guard).
+5. **Train the meta-model** once the ledger has matured picks; gate "trust" on backtest.
+6. First-class European single-stock universes (constituent lists).
+7. GPU option for Kronos-base (fast interactive scans).
 
 ---
 

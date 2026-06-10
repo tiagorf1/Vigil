@@ -113,7 +113,11 @@ async def _run_spec(runmod, spec: RunSpec) -> None:
         stage_orders=False, pred_len=None, mc_paths=None, notify=False,
         no_notify=False, offline=True)
     try:
-        await runmod.run_scan(ns)   # auto-notifies via the Telegram hook
+        path = await runmod.run_scan(ns)   # auto-notifies via the Telegram hook
+        if path:
+            from scanner import daily_board
+            combined = daily_board.ingest(path, spec.label)
+            logger.info("Daily board updated: %s", combined)
     except Exception as exc:  # noqa: BLE001
         logger.warning("signal scan %s failed: %s", spec.label, exc)
 

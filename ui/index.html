@@ -447,7 +447,7 @@ function renderList(){
     d.innerHTML=`<div class="rk">${String(pr).padStart(2,'0')}</div>
       <div><div class="tk">${esc(it.symbol)}${it.held?' <span class="held">HELD</span>':''}</div>
       <div class="nm">${esc(it.name||'')}</div>
-      <div class="st"><span class="hbadge dir-${esc(it.direction||'long')}">${(it.direction||'long')==='short'?'SHORT':'LONG'}</span>${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(PROFILE)}</span></div></div>
+      <div class="st"><span class="hbadge dir-${esc(it.direction||'long')}">${(it.direction||'long')==='short'?'SHORT':'LONG'}</span>${esc(it.strategy_type||'')}<span class="hbadge h-${esc(it.horizon||'medium')}">${esc(PROFILE)}</span>${it.source_bucket?`<span class="hbadge">${esc(it.source_bucket)}</span>`:''}</div></div>
       <div class="rt">${typeof ps==='number'?`<div class="vscore" title="${esc(PROFILE)} profile score">${ps.toFixed(0)}</div>`:(typeof it.score==='number'?`<div class="vscore" title="Vigil blend">${it.score.toFixed(0)}</div>`:'')}${stars(it.conviction)}
         <div class="rtstats">
           ${metricMini('RET',rawPct(it.expected_return_pct),retCls(it.expected_return_pct))}
@@ -503,8 +503,18 @@ function decisionBlock(it){
     const cls=type==='pct'?retCls(val):(type==='prob'?probCls(val):'');
     cells+=`<div class="shaper"><div class="sk">${label}</div><div class="sv ${cls}">${out}</div></div>`;
   });
-  const note='<div style="color:var(--faint);font-size:12px;margin-top:8px">Fund/tech are coarse screening inputs, not calibrated probabilities. The opportunity profile ranker is the better read on how to use the idea.</div>';
-  return cells?`<div class="block"><h2>Screening inputs · coarse filters</h2><div class="shapers">${cells}</div>${note}</div>`:'';
+  const note='<div style="color:var(--faint);font-size:12px;margin-top:8px">Fund/tech are evidence scores: raw screen blended with same-scan peer rank and data confidence. They are not calibrated probabilities.</div>';
+  return cells?`<div class="block"><h2>Screening inputs · evidence scores</h2><div class="shapers">${cells}</div>${note}</div>`:'';
+}
+function evidenceBlock(it){
+  const e=it.evidence_scores;if(!e)return '';
+  const row=(label,o)=>!o?'':[
+    dcell(label+' evidence',typeof o.evidence==='number'?o.evidence.toFixed(0)+'/100':'—'),
+    dcell(label+' raw',typeof o.raw==='number'?o.raw.toFixed(0)+'/100':'—'),
+    dcell(label+' peer rank',typeof o.peer_percentile==='number'?o.peer_percentile.toFixed(0)+'th pctile':'—'),
+    dcell(label+' confidence',typeof o.confidence==='number'?(o.confidence*100).toFixed(0)+'%':'—')
+  ].join('');
+  return `<div class="block"><h2>Evidence score calibration</h2>${dgrid(row('Fund',e.fundamental)+row('Tech',e.technical))}<div style="color:var(--faint);font-size:12px;margin-top:8px">${esc(e.method||'Raw screen blended with peer rank and confidence.')}</div></div>`;
 }
 function opportunityBlock(it){
   const op=it.opportunity||{},p=op.profiles||{};
@@ -537,8 +547,8 @@ function render(it){
      ${statTile('Probability up',rawProb(it.prob_up))}
      ${(it.opportunity&&it.opportunity.best_profile)?statTile('Best profile',esc(it.opportunity.best_profile)):''}
      ${(it.track_record&&it.track_record.model&&it.track_record.model.available&&typeof it.track_record.model.direction_hit_rate==='number')?statTile('Model hit',`${(it.track_record.model.direction_hit_rate*100).toFixed(0)}%`):''}
-     ${statTile('Fund screen',sbar(sc.fundamental))}
-     ${statTile('Tech screen',sbar(sc.technical))}
+     ${statTile('Fund evidence',sbar(sc.fundamental))}
+     ${statTile('Tech evidence',sbar(sc.technical))}
    </div>
    <div style="display:flex;gap:2px;border-bottom:2px solid var(--ink-strong);margin-bottom:20px">
      <button class="vtab" data-tab="report" onclick="switchTab('report')" style="background:none;border:none;font-family:var(--sans);font-weight:800;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;color:var(--ink-strong);border-bottom:2px solid var(--claret);margin-bottom:-2px">Report</button>
@@ -566,6 +576,7 @@ function render(it){
      ${probLine(it)}
      ${trackSummary(it)}
      ${trackRecordBlock(it)}
+     ${evidenceBlock(it)}
      ${scoreBlock(it)}
      ${barrierBlock(r)}${termBlock(r)}${kfeatBlock(r)}${kqualBlock(r)}
      ${optionsBlock(r)}${insightsBlock(r)}${peersBlock(r)}
@@ -702,7 +713,7 @@ function renderHeader(){
   $('bench').innerHTML=bs.length?'Benchmarks '+bs.map(b=>`${esc(b.symbol)} <b class="${(b.expected_return_pct||0)>=0?'up':'dn'}">${rawPct(b.expected_return_pct)}</b>`).join('&nbsp;&nbsp;'):'';
   const fc=DATA.forecast_config||{};
   const ftxt=fc.horizons&&fc.horizons.length?` · ${fc.horizons.join('/')}d/${fc.mc_paths||'—'}p`:(fc.pred_len?` · ${fc.pred_len}d/${fc.mc_paths||'—'}p`:'');
-  $('prov-pill').textContent='synth: '+(DATA.provider||'—')+ftxt;
+  $('prov-pill').textContent=(DATA.combined_board?`combined ${DATA.bucket_count||0} buckets · `:'')+'synth: '+(DATA.provider||'—')+ftxt;
 }
 function renderAll(){
   window.__view='watchlist';

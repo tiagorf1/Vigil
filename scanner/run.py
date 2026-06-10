@@ -214,6 +214,12 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                 c.sector = info["quote_type"].title()
             cleaned.append(c)
         survivors = cleaned or survivors
+        try:
+            from scanner import evidence_scores
+            evidence_scores.apply_to_candidates(survivors)
+            status("      Evidence scores: raw fund/tech blended with peer rank + data confidence")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("evidence score normalization failed: %s", exc)
 
         # ── [4/6] Kronos batched forecasts (reuse screener's OHLCV) ────────
         status(f"[4/6] Kronos forecasting {len(survivors)} names "
@@ -472,7 +478,10 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             return {"report": report, "forecast": fc, "sector": cand.sector,
                     "asset_class": cand.asset_class,
                     "indicators": cand.indicators,
-                    "fund_score": cand.fund_score, "tech_score": cand.tech_score}
+                    "fund_score": cand.fund_score, "tech_score": cand.tech_score,
+                    "raw_fund_score": getattr(cand, "raw_fund_score", cand.fund_score),
+                    "raw_tech_score": getattr(cand, "raw_tech_score", cand.tech_score),
+                    "evidence_scores": getattr(cand, "evidence_scores", None)}
 
         entries = await asyncio.gather(*[build_entry(c) for c in survivors])
 
