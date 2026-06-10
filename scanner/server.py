@@ -368,6 +368,24 @@ def _pull_cloud_latest() -> bool:
 
 @app.get("/api/watchlist")
 def get_watchlist(file: str = "latest") -> JSONResponse:
+    # 'board' = today's combined daily board: prefer the cloud worker's copy (the
+    # buckets run there), fall back to a locally built one.
+    if file == "board":
+        cfg = get_config()
+        if cfg.vigil_worker_url:
+            try:
+                hdr = {"X-Vigil-Token": cfg.vigil_worker_token} if cfg.vigil_worker_token else {}
+                with httpx.Client(timeout=15, headers=hdr) as c:
+                    r = c.get(f"{cfg.vigil_worker_url.rstrip('/')}/result/board")
+                if r.status_code == 200:
+                    return JSONResponse(r.json())
+            except Exception:  # noqa: BLE001
+                pass
+        daily = OUTPUTS_DIR / "daily"
+        boards = sorted(daily.glob("*/combined.json"), reverse=True) if daily.exists() else []
+        if boards:
+            return JSONResponse(json.loads(boards[0].read_text()))
+        raise HTTPException(status_code=404, detail="no daily board yet")
     name = "latest.json" if file in ("latest", "", None) else Path(file).name
     # When asking for 'latest' and not mid-scan, refresh from the cloud worker so
     # results that finished while the Mac was off still appear.

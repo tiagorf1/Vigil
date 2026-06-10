@@ -68,6 +68,20 @@ def health() -> dict:
             "auth_required": bool(os.environ.get("VIGIL_WORKER_TOKEN", "").strip())}
 
 
+@app.get("/result/board")
+def daily_board_result(x_vigil_token: str | None = Header(None)) -> JSONResponse:
+    """Today's combined daily board (falls back to the most recent day's board).
+    Lets the cockpit show the full bucket-accumulated board even after an
+    interactive scan has overwritten latest.json."""
+    _auth(x_vigil_token)
+    daily = get_config().project_root / "outputs" / "daily"
+    boards = sorted(daily.glob("*/combined.json"), reverse=True) if daily.exists() else []
+    if not boards:
+        raise HTTPException(status_code=404, detail="no daily board yet")
+    import json
+    return JSONResponse(json.loads(boards[0].read_text()))
+
+
 @app.get("/result/latest")
 def latest_result(x_vigil_token: str | None = Header(None)) -> JSONResponse:
     """The worker's most recent saved watchlist, regardless of which job made it.

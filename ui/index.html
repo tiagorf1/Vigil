@@ -755,7 +755,7 @@ async function loadCalibration(){
 async function loadHistory(){
   if(!API.has)return;
   try{const r=await fetch('/api/outputs');const d=await r.json();const sel=$('history');
-    sel.innerHTML='<option value="">History ▾</option>'+(d.outputs||[]).map(o=>
+    sel.innerHTML='<option value="">History ▾</option><option value="board">&#9733; Today&#39;s board</option>'+(d.outputs||[]).map(o=>
       `<option value="${esc(o.file)}">${esc((o.generated_at||'').slice(5,16))} · ${esc(o.directive||'').slice(0,22)} (${o.count})</option>`).join('');
   }catch(e){}
 }
