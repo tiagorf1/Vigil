@@ -30,3 +30,6 @@ logs/
 
 # Personal portfolio
 portfolio.json
+
+# local macOS launcher bundle
+*.app/
