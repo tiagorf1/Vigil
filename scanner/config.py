@@ -192,7 +192,7 @@ def get_config() -> Config:
         kronos_top_p=float(_get("KRONOS_TOP_P", "0.95") or 0.95),
         kronos_device=_get("KRONOS_DEVICE", "auto") or "auto",
         kronos_service_url_override=_get("KRONOS_SERVICE_URL"),
-        kronos_http_timeout=float(_get("KRONOS_HTTP_TIMEOUT", "3600") or 3600),
+        kronos_http_timeout=float(_get("KRONOS_HTTP_TIMEOUT", "5400") or 5400),
         kronos_screen_paths=_get_int("KRONOS_SCREEN_PATHS", 6),
         default_lookback=_get_int("DEFAULT_LOOKBACK", 400),
         default_pred_len=_get_int("DEFAULT_PRED_LEN", 90),

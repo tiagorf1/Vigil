@@ -60,6 +60,19 @@ short with a bullish one); a stop on the wrong side of entry; a risk/reward that
 does not match the entry/stop/target; "high conviction" on a near-coin-flip
 probability; a position size that ignores a missing edge; a horizon that fights the
 thesis; or any claim unsupported by the supplied numbers. Be specific and terse.
+DEFINITIONS — these are correct by design; do NOT flag them as inconsistent:
+- `expected_r` is a PROBABILITY-WEIGHTED expected R-multiple
+  (= reward/risk x P(target) - P(stop)). It is NOT the raw reward/risk ratio
+  (`risk_reward` / `rr_value`) and is SUPPOSED to differ from it (it will usually be
+  lower). Never claim expected_r and the reward/risk ratio are inconsistent, and
+  never call expected_r a probability.
+- `horizon` (low/medium/high) is the FORECAST-WINDOW class (which of the 10/30/60-day
+  forecasts was selected). `expected_days_to_target` is the simulated first-passage
+  time to the target. A short days-to-target under a longer forecast window is normal
+  (a position can resolve early); do NOT call these contradictory.
+- `kelly_full` is derived from P(target) and the reward/risk ratio; it is consistent
+  with `expected_r` even though the numbers differ.
+
 Output ONLY JSON: {"coherent": bool, "severity": "low|medium|high",
 "concerns": ["..."]}. Use severity "high" only for a problem that would change the
 decision; "low" if it is essentially coherent."""
