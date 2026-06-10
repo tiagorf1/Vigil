@@ -132,7 +132,15 @@ class UniverseBuilder:
         # Index/ETF presets expand to component companies. The scanner's job is
         # to find investable company ideas, not forecast SPY or ^GSPC directly.
         if asset_class == "index":
-            # Named (esp. European/Asian) indices -> scan the index symbols directly.
+            # European indices -> scan their CONSTITUENT companies (like the US),
+            # scored as equities (curated lists in index_constituents).
+            from scanner.index_constituents import constituents_for
+            euro = constituents_for(directive)
+            if euro:
+                logger.info("European index '%s' -> %d constituents", directive, len(euro))
+                return euro[: self.cfg.max_universe_size]
+            # Other named indices (Asia, etc.) with no constituent list -> scan the
+            # index symbols themselves with momentum scoring.
             named = _match_named_index(directive)
             if named:
                 logger.info("Named index '%s' -> %s", directive, ", ".join(named))

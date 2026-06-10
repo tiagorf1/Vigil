@@ -397,6 +397,45 @@ def get_watchlist(file: str = "latest") -> JSONResponse:
     return JSONResponse(json.loads(path.read_text()))
 
 
+# ── index ticker tape (old-school running quotes) ──────────────────────────
+_TICKER = [
+    ("SPY", "S&P 500"), ("QQQ", "Nasdaq 100"), ("DIA", "Dow 30"), ("IWM", "Russell 2000"),
+    ("EWU", "FTSE 100"), ("EWG", "DAX"), ("EWQ", "CAC 40"), ("FEZ", "Euro Stoxx 50"),
+    ("EWJ", "Japan"), ("MCHI", "China"), ("INDA", "India"),
+    ("GLD", "Gold"), ("USO", "Oil"), ("BTCUSD", "Bitcoin"),
+]
+_ticker_cache: dict = {"ts": 0.0, "data": None}
+
+
+@app.get("/api/ticker")
+async def ticker() -> dict:
+    """Last close + day change for the index/asset ETFs shown in the tape. Cached
+    10 min so page loads don't hammer Yahoo."""
+    import time as _t
+    if _ticker_cache["data"] and _t.time() - _ticker_cache["ts"] < 600:
+        return _ticker_cache["data"]
+    from scanner import market_data
+
+    async def one(sym: str, label: str):
+        try:
+            rows = await market_data.fallback_ohlcv(sym, bars=6)
+        except Exception:  # noqa: BLE001
+            return None
+        closes = [r.get("close") for r in (rows or []) if r.get("close") is not None]
+        if len(closes) < 2:
+            return None
+        last, prev = closes[-1], closes[-2]
+        chg = ((last / prev - 1) * 100) if prev else None
+        return {"symbol": sym, "label": label, "last": round(last, 2),
+                "change_pct": round(chg, 2) if chg is not None else None}
+
+    import asyncio as _a
+    res = await _a.gather(*[one(s, l) for s, l in _TICKER])
+    data = {"items": [r for r in res if r]}
+    _ticker_cache.update(ts=_t.time(), data=data)
+    return data
+
+
 @app.get("/api/health")
 async def health() -> dict:
     cfg = get_config()

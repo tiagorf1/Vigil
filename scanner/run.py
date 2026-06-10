@@ -152,10 +152,10 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         asset_class = args.asset_class or ("crypto" if _looks_crypto(universe) else "equity")
         benchmark_symbols: list[str] = []
         if requested_asset_class == "index":
-            # US presets expand to company components (scored as equities). Named
-            # indices (^FTSE, ^GDAXI, FTSEMIB.MI ...) are scanned as the indices
-            # themselves with momentum scoring.
-            if any(s.startswith("^") or "." in s for s in universe):
+            # US + European presets expand to company components (scored as
+            # equities). Only an actual index SYMBOL (caret-prefixed, e.g. ^N225)
+            # is scanned at index level with momentum scoring.
+            if any(s.startswith("^") for s in universe):
                 asset_class = "index"
                 status("      Scanning index level (momentum): " + ", ".join(universe[:8]))
             else:

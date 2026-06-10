@@ -56,6 +56,19 @@ body{
 .bench b{font-variant-numeric:tabular-nums}
 .cal{font-family:var(--sans);font-size:11px;color:var(--teal);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
 
+/* ── index ticker tape (running quotes) ── */
+.tape{overflow:hidden;white-space:nowrap;background:var(--ink-strong);border-bottom:1px solid var(--rule-2)}
+.tape-track{display:inline-flex;align-items:center;gap:0;animation:tape 60s linear infinite;will-change:transform}
+.tape:hover .tape-track{animation-play-state:paused}
+.tape-item{display:inline-flex;align-items:baseline;gap:7px;padding:7px 20px;cursor:pointer;
+  border-right:1px solid rgba(255,255,255,.08);font-family:var(--mono);font-size:11.5px;color:var(--paper);transition:background .12s}
+.tape-item:hover{background:rgba(255,255,255,.08)}
+.tape-item .tk{font-family:var(--sans);font-weight:800;letter-spacing:.04em}
+.tape-item .lb{color:rgba(255,241,229,.55);font-family:var(--sans);font-size:9px;text-transform:uppercase;letter-spacing:.1em}
+.tape-item .px{font-variant-numeric:tabular-nums}
+.tape-item .up{color:#5fd39a}.tape-item .dn{color:#ff7a7a}
+@keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
 /* ── section index nav (FT front-page rule) ── */
 .secnav{display:none;align-items:center;gap:2px;padding:7px 26px;border-top:1px solid var(--claret);
   border-bottom:1px solid var(--rule-black);background:var(--paper)}
@@ -278,6 +291,9 @@ ul.why li::before{content:"▸";position:absolute;left:2px;top:6px;color:var(--c
       <span class="pill" id="prov-pill" style="color:var(--teal)"></span>
     </div>
   </div>
+
+  <!-- index ticker tape (running quotes) -->
+  <div class="tape" id="tape" style="display:none"><div class="tape-track" id="tape-track"></div></div>
 
   <!-- section index nav -->
   <nav class="secnav" id="secnav">
@@ -898,6 +914,26 @@ function wire(){
     else runPreset(c.dataset.region,c.dataset.ac);
   }));
 }
+async function loadTicker(){
+  if(!API.has)return;
+  try{
+    const r=await fetch('/api/ticker'); if(!r.ok)return;
+    const items=(await r.json()).items||[]; if(!items.length)return;
+    const cell=it=>{
+      const c=typeof it.change_pct==='number'?(it.change_pct>=0?'up':'dn'):'';
+      const chg=typeof it.change_pct==='number'?`<span class="${c}">${it.change_pct>=0?'+':''}${it.change_pct.toFixed(2)}%</span>`:'';
+      const last=typeof it.last==='number'?it.last.toLocaleString(undefined,{maximumFractionDigits:2}):'';
+      return `<span class="tape-item" data-sym="${esc(it.symbol)}" title="Click to scan ${esc(it.label)}"><span class="lb">${esc(it.label)}</span><span class="px">${last}</span>${chg}</span>`;
+    };
+    const html=items.map(cell).join('');
+    const track=$('tape-track'); track.innerHTML=html+html;   // duplicate -> seamless loop
+    $('tape').style.display='block';
+    track.querySelectorAll('.tape-item').forEach(el=>el.onclick=()=>{
+      const s=el.dataset.sym; $('directive').value=s;
+      _startScan(scanOptions({directive:s, asset_class:null, provider:$('provider').value||'gemini'}));
+    });
+  }catch(e){}
+}
 async function boot(){
   wire();
   try{const r=await fetch('/api/health');if(r.ok){const h=await r.json();API.has=true;
@@ -905,9 +941,11 @@ async function boot(){
     $('led-kr').className='led '+(h.kronos?'on':'off');
     $('prov-pill').textContent='synth: '+(h.provider||'—');}}catch(e){API.has=false}
   await loadWatchlist('latest');await loadHistory();await loadCalibration();
+  loadTicker();
   if(API.has)setInterval(async()=>{try{const h=await(await fetch('/api/health')).json();
     $('led-kr').className='led '+(h.kronos?'on':'off');}catch(e){}},15000);
   if(API.has)setInterval(autoRefresh,120000);   // pull new results every 2 min
+  if(API.has)setInterval(loadTicker,600000);    // refresh quotes every 10 min
 }
 boot();
 </script>
