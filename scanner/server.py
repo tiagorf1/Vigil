@@ -402,7 +402,9 @@ _TICKER = [
     ("SPY", "S&P 500"), ("QQQ", "Nasdaq 100"), ("DIA", "Dow 30"), ("IWM", "Russell 2000"),
     ("EWU", "FTSE 100"), ("EWG", "DAX"), ("EWQ", "CAC 40"), ("FEZ", "Euro Stoxx 50"),
     ("EWJ", "Japan"), ("MCHI", "China"), ("INDA", "India"),
-    ("GLD", "Gold"), ("USO", "Oil"), ("BTCUSD", "Bitcoin"),
+    # Commodities show the FRONT-MONTH FUTURES price (what "gold"/"oil price"
+    # actually means), not the ETF proxy: GC=F = COMEX gold, CL=F = WTI crude.
+    ("GC=F", "Gold"), ("CL=F", "WTI Crude"), ("BTCUSD", "Bitcoin"),
 ]
 _ticker_cache: dict = {"ts": 0.0, "data": None}
 

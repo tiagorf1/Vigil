@@ -128,6 +128,7 @@ def analyze(ohlcv: list[dict], direction: str = "long") -> dict:
         else:
             setup = "neutral"
         trail = f"${px + 3*atr:,.2f} (3·ATR chandelier)"
+        trail_value = round(px + 3 * atr, 4)
     else:
         # ── LONG setup ──
         if uptrend:
@@ -167,6 +168,7 @@ def analyze(ohlcv: list[dict], direction: str = "long") -> dict:
         else:
             setup = "neutral"
         trail = f"${px - 3*atr:,.2f} (3·ATR chandelier)"
+        trail_value = round(px - 3 * atr, 4)
 
     entry_lo, entry_hi = px - 0.3 * atr, px + 0.3 * atr
     out.update({

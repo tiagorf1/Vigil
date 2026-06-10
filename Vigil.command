@@ -1,8 +1,7 @@
 #!/bin/bash
-# Double-click this file (macOS) to launch the Vigil control panel.
-# It starts the local server and opens the browser; close the Terminal window to stop.
-cd "$(dirname "$0")"
-echo "Starting Vigil — Markets Watch…"
-echo "Your browser will open automatically. Close this window to stop the server."
-echo
-exec python3 -m scanner.server
+# Double-click to launch the Vigil cockpit. Opens the browser automatically.
+PY="/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
+[ -x "$PY" ] || PY="$(command -v python3)"
+cd "$(dirname "$0")" || exit 1
+echo "Starting Vigil… browser opens shortly. Close this window to stop."
+exec "$PY" -m scanner.server

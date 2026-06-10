@@ -51,8 +51,10 @@ class TelegramNotifier:
 
 
 def build_signal_message(watchlist: dict) -> str | None:
-    """Compose a signal message from qualifying picks + exits, or None if
-    nothing clears the bar (then we stay quiet)."""
+    """Compose a signal message. We send the message when at least one pick
+    clears the bar (or there are exits), but the message then lists EVERY pick
+    on the board so nothing is missed. Each line is deliberately minimal:
+    direction, entry, stop, target, conviction — nothing else to decode."""
     cfg = get_config()
     items = watchlist.get("watchlist", [])
     exits = watchlist.get("exits", [])
@@ -65,24 +67,25 @@ def build_signal_message(watchlist: dict) -> str | None:
                 or (isinstance(exp, (int, float)) and abs(exp) >= cfg.signal_min_return)
                 or (isinstance(prob, (int, float)) and (prob >= 0.65 or prob <= 0.35)))
 
-    picks = [it for it in items if qualifies(it)]
-    if not picks and not exits:
+    # Gate on whether ANYTHING is worth pinging about; if so, show the whole board.
+    if not any(qualifies(it) for it in items) and not exits:
         return None
 
     directive = watchlist.get("directive", "")
     when = (watchlist.get("generated_at", "") or "")[:16].replace("T", " ")
     lines = [f"🛰 <b>VIGIL</b> — {_esc(directive)}", f"<i>{when} UTC</i>", ""]
 
-    for it in picks[:8]:
-        stars = "★" * int(it.get("conviction", 0)) + "☆" * (5 - int(it.get("conviction", 0)))
-        exp = it.get("expected_return_pct")
-        exp_s = f"{exp:+.1f}%" if isinstance(exp, (int, float)) else "n/a"
-        prob = it.get("prob_up")
-        prob_s = f" · P↑{prob*100:.0f}%" if isinstance(prob, (int, float)) else ""
-        lines.append(
-            f"<b>{_esc(it.get('symbol'))}</b> {stars}  {exp_s}{prob_s}  "
-            f"{_esc(it.get('strategy_type',''))} · R/R {_esc(it.get('risk_reward','n/a'))}"
-        )
+    for it in items[:20]:
+        rep = it.get("report", {}) or {}
+        d = (it.get("direction") or rep.get("direction") or "long").lower()
+        head = "📈 LONG" if d != "short" else "📉 SHORT"
+        conv = int(it.get("conviction", 0) or 0)
+        stars = "★" * conv + "☆" * (5 - conv)
+        entry = rep.get("entry_zone") or it.get("entry_zone") or "n/a"
+        stop = rep.get("stop_loss") or it.get("stop_loss") or "n/a"
+        target = rep.get("target") or it.get("target") or "n/a"
+        lines.append(f"{head} <b>{_esc(it.get('symbol'))}</b> {stars}")
+        lines.append(f"   entry {_esc(entry)} · stop {_esc(stop)} · target {_esc(target)}")
 
     if exits:
         lines.append("")

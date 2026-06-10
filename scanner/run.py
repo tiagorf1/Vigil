@@ -352,6 +352,28 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             sel = HZ.select(per_h, ta, horizons)
             fc = per_h.get(sel.get("horizon_days")) if sel.get("horizon_days") else None
             op_days = sel.get("horizon_days") or max(horizons)
+            # 4b) Pick ONE stop so the user is never shown two competing exits.
+            #   Trend-following trade (forecast agrees with trend + a continuation
+            #   /breakout setup) -> ATR chandelier TRAILING stop (lets winners run).
+            #   Reversal / counter-trend / range trade -> the STRUCTURAL stop
+            #   (a fixed level past structure). Whichever we choose becomes the
+            #   single stop, and R/R is recomputed for it so everything downstream
+            #   (barrier probs, sizing, sanity, report) stays internally consistent.
+            _trend_setup = ta.get("setup") in (
+                "breakout", "trend_continuation", "downtrend_continuation", "breakdown")
+            _use_trail = bool(sel.get("agrees") and _trend_setup
+                              and isinstance(ta.get("trail_value"), (int, float)))
+            if _use_trail:
+                ta["stop_value"] = ta["trail_value"]
+                ta["stop"] = f"${ta['trail_value']:,.2f}"
+                ta["stop_method"] = "trailing (3·ATR)"
+            else:
+                ta["stop_method"] = "structural"
+            _e, _s, _t = ta.get("entry_value"), ta.get("stop_value"), ta.get("target_value")
+            if all(isinstance(x, (int, float)) for x in (_e, _s, _t)) and abs(_e - _s) > 1e-9:
+                _rr = abs(_t - _e) / abs(_e - _s)
+                ta["rr_value"] = round(_rr, 2)
+                ta["rr"] = f"1:{_rr:.1f}" if _rr > 0 else "n/a"
 
             news = await oa.get_news(cand.symbol, limit=5)
             earnings = await oa.get_earnings_calendar(cand.symbol) if asset_class == "equity" else {}
@@ -415,10 +437,17 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             report["_ta"] = ta
             if ta.get("setup") and ta.get("rr_value") and ta["rr_value"] > 0:
                 report["entry_zone"] = ta["entry_zone"]
-                report["stop_loss"] = f"{ta['stop']} ({ta['setup']})"
+                report["stop_loss"] = f"{ta['stop']} ({ta.get('stop_method', ta['setup'])})"
+                report["stop_method"] = ta.get("stop_method")
                 report["target"] = ta["target"]
                 report["risk_reward"] = ta["rr"]
-                report["trail_stop"] = ta.get("trail_stop")
+                # The OTHER stop is kept only as an optional management note, never
+                # as a second competing level. If we chose trailing, the structural
+                # level is the note; if we chose structural, the trailing is the note.
+                report["manage_with"] = (
+                    "structural exit"
+                    if ta.get("stop_method", "").startswith("trailing")
+                    else ta.get("trail_stop"))
                 report["setup"] = ta["setup"]
                 report["confluence"] = ta["confluence"]
             # ── Full Kronos features ──

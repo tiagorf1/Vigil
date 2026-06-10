@@ -661,7 +661,8 @@ function setupBlock(r){const t=r._ta;if(!t||!t.setup)return '';
   const mp=r._meta_prob_up;
   const rows=[['Setup',esc(t.setup)],['Trend',esc(t.trend||'—')],
     ['ADX',t.adx==null?'—':t.adx],['Confluence',(t.confluence||0)+'/5'],
-    ['Trailing stop (after entry)',t.trail_stop==null?'—':t.trail_stop]];
+    ['Stop method',esc(r.stop_method||t.stop_method||'—')],
+    ['Manage with',r.manage_with==null?'—':esc(r.manage_with)]];
   if(typeof mp==='number')rows.push(['Calibrated P(up)',(mp*100).toFixed(0)+'%']);
   const sigs=(t.signals&&t.signals.length)?`<ul class="why" style="margin-top:10px">${t.signals.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:'';
   return `<div class="block"><h2>Technical setup</h2>${dgrid(rows.map(([k,v])=>dcell(k,v)).join(''))}${sigs}</div>`;}
