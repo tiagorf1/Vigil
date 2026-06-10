@@ -110,6 +110,8 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
     # records[(asset_class, horizon)] -> list of dicts
     records = defaultdict(list)
 
+    from scanner import entry_exit
+
     for H in horizons:
         step = max(H, 5)
         items, meta = [], []
@@ -121,29 +123,182 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
                     continue
                 inp = rows[:ci][-lookback:]
                 cur = rows[ci - 1]["close"]
+                future = rows[ci:ci + H]       # the H realized bars after entry
                 realized = rows[ci - 1 + H]["close"]
-                if not cur or not realized:
+                if not cur or not realized or len(future) < H:
                     continue
                 key = f"{s}#h{H}#c{k}"
                 items.append({"symbol": key, "ohlcv": inp})
-                meta.append((key, s, asset_class_of(s), H, cur, realized))
+                meta.append((key, s, asset_class_of(s), H, k, cur, realized, inp, future))
         if not items:
             continue
         logger.info("H=%d: %d forecasts", H, len(items))
         res = {r["symbol"]: r for r in await _forecast(items, H, paths)}
-        for key, s, ac, H_, cur, realized in meta:
+        for key, s, ac, H_, k, cur, realized, inp, future in meta:
             r = res.get(key)
             if not r or r.get("error"):
                 continue
             pred_ret = (r.get("expected_return_pct") or 0.0) / 100.0
             real_ret = realized / cur - 1.0
             lo = r["cone"]["q05"][-1]; hi = r["cone"]["q95"][-1]
+            # ── Strategy realised P&L (first-passage), not just point direction ──
+            side = "long" if pred_ret >= 0 else "short"
+            ta = entry_exit.analyze(inp, direction=side)
+            R = _simulate_trade(ta, side, cur, future)
+            agrees = (ta.get("trend") == "up" and side == "long") or \
+                     (ta.get("trend") == "down" and side == "short")
             records[(ac, H_)].append({
-                "symbol": s, "pred": pred_ret, "real": real_ret,
+                "symbol": s, "cut": k, "pred": pred_ret, "real": real_ret,
                 "covered": bool(lo <= realized <= hi),
+                # predicted vs realised VOLATILITY (the pure-vol-play test)
+                "pred_vol": (r.get("terminal_vol_pct") or 0.0) / 100.0,
+                "real_vol": _realised_vol(cur, future),
+                # strategy outcome + the conditions we want to slice on
+                "R": R,
+                "win": (R is not None and R > 0),
+                "agrees": bool(agrees),
+                "confluence": int(ta.get("confluence") or 0),
+                "setup": ta.get("setup") or "none",
             })
 
     return _aggregate(records, cfg)
+
+
+def _simulate_trade(ta: dict, side: str, entry: float, future: list[dict]) -> float | None:
+    """First-passage R-multiple for the actual trade plan: walk the realised
+    bars and see whether the STOP or the TARGET prints first. Conservative — a
+    bar that straddles both is counted as the stop. Returns the realised reward
+    in units of risk (R); None when there is no usable setup."""
+    stop, target = ta.get("stop_value"), ta.get("target_value")
+    if not (isinstance(stop, (int, float)) and isinstance(target, (int, float))):
+        return None
+    risk = abs(entry - stop)
+    if risk <= 1e-9:
+        return None
+    for bar in future:
+        hi, lo = bar.get("high"), bar.get("low")
+        if hi is None or lo is None:
+            continue
+        if side == "long":
+            if lo <= stop:
+                return -1.0
+            if hi >= target:
+                return (target - entry) / risk
+        else:
+            if hi >= stop:
+                return -1.0
+            if lo <= target:
+                return (entry - target) / risk
+    fc = future[-1].get("close")
+    if fc is None:
+        return None
+    return (fc - entry) / risk if side == "long" else (entry - fc) / risk
+
+
+def _realised_vol(entry: float, future: list[dict]) -> float:
+    """Stdev of daily returns along the realised path — direction-agnostic, for
+    the predicted-vs-realised volatility ranking test."""
+    closes = [entry] + [b.get("close") for b in future if b.get("close") is not None]
+    if len(closes) < 3:
+        return 0.0
+    arr = np.array(closes, dtype=float)
+    rets = np.diff(arr) / arr[:-1]
+    return float(np.std(rets))
+
+
+def _bucket_stats(recs: list[dict]) -> dict:
+    Rs = np.array([r["R"] for r in recs], dtype=float)
+    return {"n": len(Rs), "expectancy_R": round(float(Rs.mean()), 3),
+            "win_rate": round(float((Rs > 0).mean()), 3)}
+
+
+def _strategy_summary(records: dict) -> dict:
+    """Realised trade economics per (asset_class, horizon): expectancy in R,
+    win rate, profit factor. This is what the system actually harvests."""
+    out = {}
+    for (ac, H), recs in sorted(records.items()):
+        Rs = np.array([r["R"] for r in recs if r["R"] is not None], dtype=float)
+        if len(Rs) < 5:
+            continue
+        wins, losses = Rs[Rs > 0], Rs[Rs <= 0]
+        out[f"{ac}@{H}"] = {
+            "n_trades": int(len(Rs)),
+            "expectancy_R": round(float(Rs.mean()), 3),
+            "win_rate": round(float((Rs > 0).mean()), 3),
+            "avg_win_R": round(float(wins.mean()), 3) if len(wins) else None,
+            "avg_loss_R": round(float(losses.mean()), 3) if len(losses) else None,
+            "profit_factor": round(float(wins.sum() / abs(losses.sum())), 3)
+                              if losses.sum() != 0 else None,
+            "quality": "sample_backed" if len(Rs) >= MIN_SAMPLE_BACKED_N else "low_sample_report_only",
+        }
+    return out
+
+
+def _conditional_summary(records: dict) -> dict:
+    """Where the edge lives: expectancy sliced by trade condition, pooled per
+    asset class across horizons. Tests whether filtered setups beat the average."""
+    byac = defaultdict(list)
+    for (ac, H), recs in records.items():
+        byac[ac].extend(r for r in recs if r["R"] is not None)
+    out = {}
+    for ac, recs in sorted(byac.items()):
+        buckets = {
+            "all": recs,
+            "agrees_trend": [r for r in recs if r["agrees"]],
+            "fights_trend": [r for r in recs if not r["agrees"]],
+            "confluence_ge3": [r for r in recs if r["confluence"] >= 3],
+            "agree_and_conf3": [r for r in recs if r["agrees"] and r["confluence"] >= 3],
+        }
+        stats = {name: _bucket_stats(b) for name, b in buckets.items() if len(b) >= 5}
+        if stats:
+            out[ac] = stats
+    return out
+
+
+def _cross_sectional_summary(records: dict) -> dict:
+    """Ranking skill: per cut, rank names by predicted return, measure the
+    realised return spread between the top and bottom third. Works even if
+    per-name direction is a coin flip."""
+    out = {}
+    for (ac, H), recs in sorted(records.items()):
+        by_cut = defaultdict(list)
+        for r in recs:
+            by_cut[r["cut"]].append(r)
+        spreads = []
+        for _cut, rs in by_cut.items():
+            if len(rs) < 6:
+                continue
+            rs_sorted = sorted(rs, key=lambda x: x["pred"])
+            t = max(1, len(rs_sorted) // 3)
+            bottom = rs_sorted[:t]
+            top = rs_sorted[-t:]
+            spreads.append(np.mean([x["real"] for x in top]) - np.mean([x["real"] for x in bottom]))
+        if len(spreads) >= 2:
+            out[f"{ac}@{H}"] = {
+                "n_cuts": len(spreads),
+                "mean_tercile_spread_pct": round(float(np.mean(spreads)) * 100, 3),
+                "spread_hit_rate": round(float(np.mean([s > 0 for s in spreads])), 3),
+            }
+    return out
+
+
+def _vol_skill_summary(records: dict) -> dict:
+    """THE pure-vol test: does predicted terminal vol rank realised vol across
+    names? A positive, stable rank correlation means Kronos finds the movers —
+    the basis for volatility strategies even when direction is unpredictable."""
+    out = {}
+    for (ac, H), recs in sorted(records.items()):
+        pv = [r["pred_vol"] for r in recs]
+        rv = [r["real_vol"] for r in recs]
+        if len(pv) < 8:
+            continue
+        rho = _spearman(pv, rv)
+        out[f"{ac}@{H}"] = {
+            "n": len(pv),
+            "vol_rank_corr": round(rho, 3) if rho is not None else None,
+            "quality": "sample_backed" if len(pv) >= MIN_SAMPLE_BACKED_N else "low_sample_report_only",
+        }
+    return out
 
 
 def _aggregate(records: dict, cfg) -> dict:
@@ -206,6 +361,11 @@ def _aggregate(records: dict, cfg) -> dict:
             "model_ci95_coverage": round(overall["covered"] / overall["n"], 3) if overall["n"] else None,
         },
         "scorecard": scorecard,
+        # ── the honest backtest: does the SYSTEM make money, and where? ──
+        "strategy": _strategy_summary(records),          # realised R-multiple economics
+        "conditional": _conditional_summary(records),    # expectancy by trade condition
+        "cross_sectional": _cross_sectional_summary(records),  # ranking skill (decile spread)
+        "vol_skill": _vol_skill_summary(records),        # predicted-vs-realised vol ranking
         "calibration": calibration,
     }
     return result
@@ -259,7 +419,28 @@ def main() -> None:
     o = res["overall"]
     print(f"\nOVERALL n={o['n']} debiased hit-rate={o['hit_rate_debiased']} "
           f"model CI95 coverage={o['model_ci95_coverage']}")
-    print("Wrote outputs/backtest.json and outputs/forecast_calibration.json")
+
+    print("\n=== Strategy economics (does the SYSTEM make money?) ===")
+    print(f"{'bucket':14} {'trades':>6} {'exp_R':>6} {'win%':>6} {'PF':>6}")
+    for k, v in res.get("strategy", {}).items():
+        print(f"{k:14} {v['n_trades']:>6} {v['expectancy_R']:>6} "
+              f"{v['win_rate']:>6} {str(v['profit_factor']):>6}")
+
+    print("\n=== Where the edge lives (expectancy_R by condition) ===")
+    for ac, buckets in res.get("conditional", {}).items():
+        print(f"  {ac}:")
+        for name, b in buckets.items():
+            print(f"    {name:18} n={b['n']:>4} exp_R={b['expectancy_R']:>6} win%={b['win_rate']}")
+
+    print("\n=== Ranking skill (top-minus-bottom tercile return) ===")
+    for k, v in res.get("cross_sectional", {}).items():
+        print(f"  {k:14} spread={v['mean_tercile_spread_pct']:>6}%  consistency={v['spread_hit_rate']}  (cuts={v['n_cuts']})")
+
+    print("\n=== Pure-vol test (does predicted vol rank realised vol?) ===")
+    for k, v in res.get("vol_skill", {}).items():
+        print(f"  {k:14} vol_rank_corr={str(v['vol_rank_corr']):>7}  n={v['n']}  {v['quality']}")
+
+    print("\nWrote outputs/backtest.json and outputs/forecast_calibration.json")
 
 
 if __name__ == "__main__":
