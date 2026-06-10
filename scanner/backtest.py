@@ -77,9 +77,25 @@ def _spearman(pred: list[float], real: list[float]) -> float | None:
 
 
 async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> dict:
-    from kronos_service.predictor import KronosForecaster
     cfg = get_config()
-    forecaster = KronosForecaster()
+    # Forecaster routing: if KRONOS_SERVICE_URL points at a remote GPU box, run
+    # the whole backtest FROM HERE (Mac/box) and offload only the heavy Kronos
+    # forecasting over HTTP — no web terminal on the pod. Otherwise run Kronos
+    # in-process (the old local-CPU path).
+    if cfg.kronos_is_remote:
+        from scanner.kronos_client import KronosClient
+        _kc = KronosClient()
+        await _kc.ensure_service_running()
+        logger.info("Backtest forecasting on REMOTE Kronos at %s", cfg.kronos_service_url)
+
+        async def _forecast(items, H, n_paths):
+            return await _kc.forecast_batch(items, pred_len=H, n_paths=n_paths)
+    else:
+        from kronos_service.predictor import KronosForecaster
+        _forecaster = KronosForecaster()
+
+        async def _forecast(items, H, n_paths):
+            return _forecaster.forecast_batch(items, pred_len=H, n_paths=n_paths)
 
     # Load history once per symbol.
     hist = {}
@@ -114,7 +130,7 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
         if not items:
             continue
         logger.info("H=%d: %d forecasts", H, len(items))
-        res = {r["symbol"]: r for r in forecaster.forecast_batch(items, pred_len=H, n_paths=paths)}
+        res = {r["symbol"]: r for r in await _forecast(items, H, paths)}
         for key, s, ac, H_, cur, realized in meta:
             r = res.get(key)
             if not r or r.get("error"):
