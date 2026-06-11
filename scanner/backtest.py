@@ -78,15 +78,16 @@ def _spearman(pred: list[float], real: list[float]) -> float | None:
 
 async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> dict:
     cfg = get_config()
-    # Forecaster routing: if KRONOS_SERVICE_URL points at a remote GPU box, run
-    # the whole backtest FROM HERE (Mac/box) and offload only the heavy Kronos
-    # forecasting over HTTP — no web terminal on the pod. Otherwise run Kronos
-    # in-process (the old local-CPU path).
-    if cfg.kronos_is_remote:
+    # Forecaster routing: when a remote GPU box (KRONOS_SERVICE_URL) OR a RunPod
+    # serverless endpoint is configured, run the whole backtest FROM HERE
+    # (Mac/box) and offload only the heavy Kronos forecasting — no local torch,
+    # no pod/terminal. Otherwise run Kronos in-process (the old local-CPU path).
+    if cfg.kronos_is_remote or cfg.kronos_is_serverless:
         from scanner.kronos_client import KronosClient
         _kc = KronosClient()
         await _kc.ensure_service_running()
-        logger.info("Backtest forecasting on REMOTE Kronos at %s", cfg.kronos_service_url)
+        logger.info("Backtest forecasting via %s",
+                    "serverless GPU" if cfg.kronos_is_serverless else cfg.kronos_service_url)
 
         async def _forecast(items, H, n_paths):
             # client returns {symbol: forecast}; normalise to the list shape the
@@ -410,7 +411,15 @@ def main() -> None:
                                    args.lookback, args.paths))
     outdir = cfg.project_root / "outputs"; outdir.mkdir(exist_ok=True)
     (outdir / "backtest.json").write_text(json.dumps(res, indent=2))
-    (outdir / "forecast_calibration.json").write_text(json.dumps(res["calibration"], indent=2))
+    # Guard: only promote to the live calibration when the run is big enough to
+    # be trustworthy — a tiny/test backtest must NOT clobber production calibration.
+    _n = (res.get("overall") or {}).get("n", 0)
+    if _n >= 100:
+        (outdir / "forecast_calibration.json").write_text(json.dumps(res["calibration"], indent=2))
+        print(f"Updated forecast_calibration.json (n={_n}).")
+    else:
+        print(f"Sample too small (n={_n}); kept existing forecast_calibration.json. "
+              f"Re-run with more symbols/cuts to update calibration.")
 
     print("\n=== Backtest scorecard ===")
     print(f"{'bucket':14} {'n':>4} {'bias%':>7} {'hitRaw':>7} {'hitDeb':>7} {'rankRho':>8} {'CIcov':>6} {'sigma%':>7}")
