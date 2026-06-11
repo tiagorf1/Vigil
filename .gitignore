@@ -33,3 +33,6 @@ portfolio.json
 
 # local macOS launcher bundle
 *.app/
+
+# stray macOS alias to the .app (not source)
+/Vigil
