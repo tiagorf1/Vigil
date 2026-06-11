@@ -66,6 +66,12 @@ async def test_forecast_payload_and_parse(monkeypatch):
 @pytest.mark.asyncio
 async def test_forecast_batch(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    # Pin to the plain HTTP path regardless of the developer's .env (which may
+    # now have a serverless endpoint configured).
+    monkeypatch.setenv("KRONOS_SERVERLESS_ENDPOINT", "")
+    monkeypatch.setenv("RUNPOD_API_KEY", "")
+    from scanner.config import get_config
+    get_config.cache_clear()
     client = KronosClient()
     items = [
         {"symbol": "AAPL", "ohlcv": [{"close": 1}]},

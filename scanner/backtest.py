@@ -150,6 +150,11 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
             R = _simulate_trade(ta, side, cur, future)
             agrees = (ta.get("trend") == "up" and side == "long") or \
                      (ta.get("trend") == "down" and side == "short")
+            # ── naive baselines on the SAME cut (the bar Kronos must clear) ──
+            naive_vol, naive_mom = _naive_signals(inp)
+            naive_side = "long" if (naive_mom or 0.0) >= 0 else "short"
+            naive_ta = entry_exit.analyze(inp, direction=naive_side)
+            naive_R = _simulate_trade(naive_ta, naive_side, cur, future)
             records[(ac, H_)].append({
                 "symbol": s, "cut": k, "pred": pred_ret, "real": real_ret,
                 "covered": bool(lo <= realized <= hi),
@@ -162,6 +167,10 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
                 "agrees": bool(agrees),
                 "confluence": int(ta.get("confluence") or 0),
                 "setup": ta.get("setup") or "none",
+                # naive baselines for the head-to-head
+                "naive_vol": naive_vol,
+                "naive_mom": naive_mom,
+                "naive_R": naive_R,
             })
 
     return _aggregate(records, cfg)
@@ -207,6 +216,18 @@ def _realised_vol(entry: float, future: list[dict]) -> float:
     arr = np.array(closes, dtype=float)
     rets = np.diff(arr) / arr[:-1]
     return float(np.std(rets))
+
+
+def _naive_signals(inp: list[dict], win: int = 20) -> tuple[float | None, float | None]:
+    """Dumb baselines from the input window alone (no model):
+    naive_vol = trailing realised vol; naive_mom = trailing `win`-day return.
+    These are what Kronos must BEAT to justify its existence."""
+    closes = [r.get("close") for r in inp if r.get("close") is not None]
+    if len(closes) < win + 1:
+        return None, None
+    arr = np.array(closes[-(win + 1):], dtype=float)
+    rets = np.diff(arr) / arr[:-1]
+    return float(np.std(rets)), float(arr[-1] / arr[0] - 1.0)
 
 
 def _bucket_stats(recs: list[dict]) -> dict:
@@ -304,6 +325,38 @@ def _vol_skill_summary(records: dict) -> dict:
     return out
 
 
+def _baseline_summary(records: dict) -> dict:
+    """The decisive test: does Kronos BEAT dumb baselines? Per (asset_class,
+    horizon), compare Kronos vs naive on three axes:
+      - vol ranking (predicted vs realised vol rank-corr)
+      - direction hit-rate (sign of forecast vs sign of trailing momentum)
+      - strategy expectancy (R from trading Kronos's side vs momentum's side)
+    If Kronos doesn't clear the naive column, it isn't earning its keep."""
+    out = {}
+    for (ac, H), recs in sorted(records.items()):
+        if len(recs) < 8:
+            continue
+        rv = [r["real_vol"] for r in recs]
+        k_vol = _spearman([r["pred_vol"] for r in recs], rv)
+        nv_pairs = [(r["naive_vol"], r["real_vol"]) for r in recs if r.get("naive_vol") is not None]
+        n_vol = _spearman([a for a, _ in nv_pairs], [b for _, b in nv_pairs]) if len(nv_pairs) >= 8 else None
+        k_dir = float(np.mean([(r["pred"] > 0) == (r["real"] > 0) for r in recs]))
+        nm = [r for r in recs if r.get("naive_mom") is not None]
+        n_dir = float(np.mean([(r["naive_mom"] >= 0) == (r["real"] > 0) for r in nm])) if nm else None
+        kR = [r["R"] for r in recs if r.get("R") is not None]
+        nR = [r["naive_R"] for r in recs if r.get("naive_R") is not None]
+        out[f"{ac}@{H}"] = {
+            "n": len(recs),
+            "vol_rank_corr_kronos": round(k_vol, 3) if k_vol is not None else None,
+            "vol_rank_corr_naive": round(n_vol, 3) if n_vol is not None else None,
+            "dir_hit_kronos": round(k_dir, 3),
+            "dir_hit_naive_mom": round(n_dir, 3) if n_dir is not None else None,
+            "exp_R_kronos": round(float(np.mean(kR)), 3) if kR else None,
+            "exp_R_naive_mom": round(float(np.mean(nR)), 3) if nR else None,
+        }
+    return out
+
+
 def _aggregate(records: dict, cfg) -> dict:
     scorecard = {}
     calibration = {}
@@ -369,6 +422,7 @@ def _aggregate(records: dict, cfg) -> dict:
         "conditional": _conditional_summary(records),    # expectancy by trade condition
         "cross_sectional": _cross_sectional_summary(records),  # ranking skill (decile spread)
         "vol_skill": _vol_skill_summary(records),        # predicted-vs-realised vol ranking
+        "baselines": _baseline_summary(records),          # Kronos vs naive vol/momentum
         "calibration": calibration,
     }
     return result
@@ -450,6 +504,16 @@ def main() -> None:
     print("\n=== Pure-vol test (does predicted vol rank realised vol?) ===")
     for k, v in res.get("vol_skill", {}).items():
         print(f"  {k:14} vol_rank_corr={str(v['vol_rank_corr']):>7}  n={v['n']}  {v['quality']}")
+
+    print("\n=== KRONOS vs NAIVE — does the model earn its keep? ===")
+    print(f"{'bucket':12} {'volK':>6} {'volN':>6}  | {'dirK':>5} {'dirN':>5}  | {'expRK':>6} {'expRN':>6}")
+    for k, v in res.get("baselines", {}).items():
+        def _s(x): return f"{x:.3f}" if isinstance(x, (int, float)) else "  -  "
+        print(f"{k:12} {_s(v['vol_rank_corr_kronos']):>6} {_s(v['vol_rank_corr_naive']):>6}  | "
+              f"{_s(v['dir_hit_kronos']):>5} {_s(v['dir_hit_naive_mom']):>5}  | "
+              f"{_s(v['exp_R_kronos']):>6} {_s(v['exp_R_naive_mom']):>6}")
+    print("  (volK>volN => Kronos predicts vol CHANGES, not just levels;")
+    print("   dirK/expRK > naive => Kronos direction beats plain momentum)")
 
     print("\nWrote outputs/backtest.json and outputs/forecast_calibration.json")
 
