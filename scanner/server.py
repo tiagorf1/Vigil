@@ -92,9 +92,12 @@ def _run_scan_job(req: ScanRequest) -> None:
             from_file=None, max_results=req.max_results, provider=req.provider,
             pred_len=req.pred_len, mc_paths=req.mc_paths,
             no_ui=True, push_inbox=req.push_inbox, stage_orders=req.stage_orders,
-            notify=req.notify, no_notify=False, offline=False,
+            notify=req.notify, no_notify=False, offline=True,
         )
-        asyncio.run(runmod.preflight())
+        # Offline: the cockpit runs on free Yahoo data + serverless forecasting,
+        # no OpenAlice. (Re-enable OpenAlice by setting offline=False here and
+        # running its MCP server.)
+        asyncio.run(runmod.preflight(offline=True))
         path = asyncio.run(runmod.run_scan(ns))
         JOB["result"] = path
         if not path:
