@@ -79,6 +79,8 @@ class Config:
     kronos_service_url_override: str
     kronos_http_timeout: float
     kronos_screen_paths: int   # stage-1 low-path sweep before refining the buffer
+    kronos_serverless_endpoint: str  # RunPod serverless endpoint id -> GPU forecasting on demand
+    runpod_api_key: str              # bearer token for the serverless endpoint
 
     # Scanner behaviour
     default_lookback: int
@@ -122,6 +124,12 @@ class Config:
     @property
     def kronos_is_remote(self) -> bool:
         return bool(self.kronos_service_url_override)
+
+    @property
+    def kronos_is_serverless(self) -> bool:
+        """Forecasting offloaded to a scale-to-zero RunPod serverless endpoint:
+        wakes on request, $0 when idle, nothing to start or terminate."""
+        return bool(self.kronos_serverless_endpoint and self.runpod_api_key)
 
     @property
     def signal_market_list(self) -> list[str]:
@@ -194,6 +202,8 @@ def get_config() -> Config:
         kronos_service_url_override=_get("KRONOS_SERVICE_URL"),
         kronos_http_timeout=float(_get("KRONOS_HTTP_TIMEOUT", "5400") or 5400),
         kronos_screen_paths=_get_int("KRONOS_SCREEN_PATHS", 6),
+        kronos_serverless_endpoint=_get("KRONOS_SERVERLESS_ENDPOINT") or "",
+        runpod_api_key=_get("RUNPOD_API_KEY") or "",
         default_lookback=_get_int("DEFAULT_LOOKBACK", 400),
         default_pred_len=_get_int("DEFAULT_PRED_LEN", 90),
         kronos_horizons=_get("KRONOS_HORIZONS", "10,30,60") or "10,30,60",

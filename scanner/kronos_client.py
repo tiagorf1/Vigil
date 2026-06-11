@@ -33,6 +33,11 @@ class KronosClient:
 
     # ── service lifecycle ─────────────────────────────────────────────────
     async def ensure_service_running(self, timeout: float = 90.0) -> None:
+        if self.cfg.kronos_is_serverless:
+            # Nothing to start or wait for — RunPod serverless wakes on request
+            # and scales back to zero on its own. No pod, no terminal, $0 idle.
+            logger.info("Kronos forecasting via RunPod serverless endpoint (scale-to-zero)")
+            return
         if await self._healthy():
             logger.info("Kronos service ready at %s", self.base_url)
             return
@@ -144,10 +149,14 @@ class KronosClient:
         items = [it for it in items if it.get("ohlcv")]
         if not items:
             return {}
+        pred_len = int(pred_len or self.cfg.default_pred_len)
+        n_paths = int(n_paths or self.cfg.kronos_mc_paths)
+        if self.cfg.kronos_is_serverless:
+            return await self._forecast_batch_serverless(items, pred_len, n_paths)
         payload = {
             "items": [{"symbol": it["symbol"], "ohlcv": it["ohlcv"]} for it in items],
-            "pred_len": int(pred_len or self.cfg.default_pred_len),
-            "n_paths": int(n_paths or self.cfg.kronos_mc_paths),
+            "pred_len": pred_len,
+            "n_paths": n_paths,
         }
         try:
             t0 = time.time()
@@ -169,3 +178,61 @@ class KronosClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("batch forecast call failed: %s", exc)
             return {}
+
+    # ── RunPod serverless (scale-to-zero GPU) ─────────────────────────────
+    async def _forecast_batch_serverless(
+        self, items: list[dict], pred_len: int, n_paths: int
+    ) -> dict[str, dict]:
+        """Offload forecasting to a RunPod serverless endpoint. Chunks the batch
+        to stay under payload limits, submits each chunk async, and polls for
+        the result. Returns the same {symbol: forecast} shape as the HTTP path,
+        so callers (run.py / signals / backtest) don't change."""
+        base = f"https://api.runpod.ai/v2/{self.cfg.kronos_serverless_endpoint}"
+        headers = {"Authorization": f"Bearer {self.cfg.runpod_api_key}"}
+        chunk = 48
+        out: dict[str, dict] = {}
+        t0 = time.time()
+        async with httpx.AsyncClient(timeout=self.cfg.kronos_http_timeout) as client:
+            for i in range(0, len(items), chunk):
+                batch = items[i:i + chunk]
+                body = {"input": {
+                    "items": [{"symbol": it["symbol"], "ohlcv": it["ohlcv"]} for it in batch],
+                    "pred_len": pred_len, "n_paths": n_paths,
+                }}
+                try:
+                    r = await client.post(f"{base}/run", headers=headers, json=body)
+                    if r.status_code != 200:
+                        logger.warning("serverless /run HTTP %d — %s", r.status_code, r.text[:200])
+                        continue
+                    job_id = r.json().get("id")
+                    if not job_id:
+                        logger.warning("serverless /run returned no job id")
+                        continue
+                    for res in await self._poll_serverless(client, base, headers, job_id):
+                        if res and not res.get("error"):
+                            out[res["symbol"]] = res
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("serverless batch failed: %s", exc)
+        logger.info("Serverless forecast: %d/%d symbols in %.1fs",
+                    len(out), len(items), time.time() - t0)
+        return out
+
+    async def _poll_serverless(self, client, base, headers, job_id,
+                               deadline_s: float = 600.0) -> list[dict]:
+        """Poll a submitted serverless job until COMPLETED (handles cold start)."""
+        deadline = time.time() + deadline_s
+        while time.time() < deadline:
+            try:
+                data = (await client.get(f"{base}/status/{job_id}", headers=headers)).json()
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(2.0)
+                continue
+            status = data.get("status")
+            if status == "COMPLETED":
+                return data.get("output") or []
+            if status in ("FAILED", "CANCELLED", "TIMED_OUT"):
+                logger.warning("serverless job %s ended: %s", job_id, status)
+                return []
+            await asyncio.sleep(2.0)
+        logger.warning("serverless job %s timed out after %.0fs", job_id, deadline_s)
+        return []

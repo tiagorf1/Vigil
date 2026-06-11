@@ -89,7 +89,9 @@ async def run_backtest(symbols, horizons, cuts, lookback, paths, bars=700) -> di
         logger.info("Backtest forecasting on REMOTE Kronos at %s", cfg.kronos_service_url)
 
         async def _forecast(items, H, n_paths):
-            return await _kc.forecast_batch(items, pred_len=H, n_paths=n_paths)
+            # client returns {symbol: forecast}; normalise to the list shape the
+            # in-process predictor returns, so the caller is identical.
+            return list((await _kc.forecast_batch(items, pred_len=H, n_paths=n_paths)).values())
     else:
         from kronos_service.predictor import KronosForecaster
         _forecaster = KronosForecaster()
