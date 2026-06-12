@@ -36,3 +36,7 @@ portfolio.json
 
 # stray macOS alias to the .app (not source)
 /Vigil
+
+# leaked once; never track secrets
+worker_token.rtf
+*.rtf
