@@ -19,7 +19,6 @@ import sys
 from dataclasses import dataclass
 
 from scanner.config import get_config
-from scanner.kronos_client import KronosClient
 from scanner.openalice_client import OpenAliceClient
 from scanner.portfolio import PortfolioStore
 
@@ -130,23 +129,12 @@ async def portfolio_sell_check() -> None:
         return
     logger.info("Portfolio sell-check: %d holdings", len(holdings))
 
-    kronos = KronosClient()
-    await kronos.ensure_service_running()
     async with OpenAliceClient(cfg.openalice_mcp_url, offline=True) as oa:
         items = []
         for h in holdings:
             ohlcv = await oa.get_ohlcv(h["symbol"], bars=cfg.default_lookback)
             if ohlcv:
                 items.append({"symbol": h["symbol"], "ohlcv": ohlcv})
-        forecasts = await kronos.forecast_batch(items)
-    if not cfg.kronos_is_remote:
-        kronos.shutdown()
-
-    sells = []
-    for h in holdings:
-        fc = forecasts.get(h["symbol"])
-        if fc and (fc.get("expected_return_pct") or 0) < 0:
-            sells.append((h, fc))
 
     # TA position-management alerts: trailing-stop breach or target reached.
     from scanner import entry_exit
@@ -168,18 +156,10 @@ async def portfolio_sell_check() -> None:
 
     from scanner.notify import TelegramNotifier, _esc
     notifier = TelegramNotifier()
-    if not sells and not ta_alerts:
+    if not ta_alerts:
         logger.info("Portfolio: no sell or position-level signals")
         return
     lines = ["⚠️ <b>VIGIL — portfolio alerts</b>", ""]
-    if sells:
-        lines.append("<b>Kronos sell signals</b>")
-        for h, fc in sells:
-            exp = fc.get("expected_return_pct")
-            prob = fc.get("prob_up")
-            prob_s = f" · P↑{prob*100:.0f}%" if isinstance(prob, (int, float)) else ""
-            lines.append(f"<b>{_esc(h['symbol'])}</b> {exp:+.1f}%{prob_s}  (forecast negative)")
-        lines.append("")
     if ta_alerts:
         lines.append("<b>Position levels</b>")
         for h, txt in ta_alerts:
@@ -187,7 +167,7 @@ async def portfolio_sell_check() -> None:
     msg = "\n".join(lines).strip()
     if notifier.enabled:
         await notifier.send(msg)
-        logger.info("Portfolio alerts sent (%d sells, %d levels)", len(sells), len(ta_alerts))
+        logger.info("Portfolio alerts sent (%d levels)", len(ta_alerts))
     else:
         logger.info("Telegram not configured; would send:\n%s", msg)
 

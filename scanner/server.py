@@ -113,24 +113,6 @@ def _run_scan_job(req: ScanRequest) -> None:
         runmod.STATUS_CALLBACK = None
 
 
-def _run_calibrate_job() -> None:
-    from scanner.calibrate import calibrate
-    try:
-        _on_status("Calibrating against past forecasts...")
-        res = asyncio.run(calibrate())
-        JOB["result"] = res
-        _on_status(f"Calibration done: hit_rate={res.get('hit_rate')} "
-                   f"(n={res.get('n_matured')})")
-    except SystemExit as exc:
-        JOB["error"] = str(exc).strip() or "Aborted."
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("calibrate job failed")
-        JOB["error"] = f"{type(exc).__name__}: {exc}"
-    finally:
-        JOB["running"] = False
-        JOB["stage"] = JOB["total"]
-
-
 # ── API ────────────────────────────────────────────────────────────────────
 @app.post("/api/scan")
 def start_scan(req: ScanRequest) -> dict:
@@ -185,15 +167,6 @@ def _run_remote_job(req: ScanRequest) -> None:
 def _on_status_passthrough(msg: str) -> None:
     if msg and (not JOB["log"] or JOB["log"][-1] != msg):
         _on_status(msg)
-
-
-@app.post("/api/calibrate")
-def start_calibrate() -> dict:
-    if JOB["running"]:
-        raise HTTPException(status_code=409, detail="A job is already running.")
-    _reset_job("calibrate", "calibration")
-    threading.Thread(target=_run_calibrate_job, daemon=True).start()
-    return {"started": True}
 
 
 class PortfolioAdd(BaseModel):
@@ -309,8 +282,6 @@ def _report_markdown(item: dict, directive: str) -> str:
         f"Directive: {directive or '(not specified)'}",
         f"Strategy: {item.get('strategy_type') or report.get('strategy_type') or 'n/a'}",
         f"Horizon: {item.get('horizon') or report.get('horizon') or 'n/a'}",
-        f"Kronos expected return: {exp_s}",
-        f"Probability up: {prob_s}",
         f"Risk/reward: {item.get('risk_reward') or report.get('risk_reward') or 'n/a'}",
         "",
         "## Thesis",
@@ -445,10 +416,9 @@ async def ticker() -> dict:
 async def health() -> dict:
     cfg = get_config()
     oa = await _probe(cfg.openalice_mcp_url)
-    kr = await _probe(f"{cfg.kronos_service_url}/health")
     return {
         "ok": True, "provider": cfg.llm_provider,
-        "openalice": oa, "kronos": kr,
+        "openalice": oa,
         "openalice_url": cfg.openalice_mcp_url,
     }
 

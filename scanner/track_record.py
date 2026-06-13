@@ -81,7 +81,7 @@ def _model_record(asset_class: str, horizon: int) -> dict:
         overall = bt.get("overall") or {}
         return {
             "available": False,
-            "note": "No backtest scorecard yet. Run `python -m scanner.backtest` on the worker.",
+            "note": "No factor scorecard yet. Run `python -m scanner.factor_backtest`.",
             "overall_n": overall.get("n"),
             "overall_direction_hit_rate": overall.get("hit_rate_debiased"),
             "overall_cone_coverage": overall.get("model_ci95_coverage"),

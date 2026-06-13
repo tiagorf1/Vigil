@@ -21,7 +21,6 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 from scanner.config import ConfigError, get_config
-from scanner.kronos_client import KronosClient, KronosServiceError
 from scanner.openalice_client import OpenAliceClient
 from scanner.output import WatchlistOutput
 from scanner.report_generator import ReportGenerator
@@ -129,7 +128,6 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         with open(args.from_file) as fh:
             symbols_from_file = [ln.strip().upper() for ln in fh if ln.strip()]
 
-    kronos = KronosClient()
 
     async with OpenAliceClient(cfg.openalice_mcp_url, offline=getattr(args, "offline", False)) as oa:
         # ── [1/6] Universe ────────────────────────────────────────────────
@@ -221,101 +219,23 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         except Exception as exc:  # noqa: BLE001
             logger.warning("evidence score normalization failed: %s", exc)
 
-        # ── [4/6] Kronos batched forecasts (reuse screener's OHLCV) ────────
-        status(f"[4/6] Kronos forecasting {len(survivors)} names "
-               f"(auto-horizons {'/'.join(str(h) for h in cfg.horizon_list)}d, {mc_paths} paths)...")
-        warning = _local_load_warning(cfg, len(survivors), pred_len, mc_paths)
-        if warning:
-            status("      " + warning)
-        try:
-            await kronos.ensure_service_running()
-        except KronosServiceError as exc:
-            raise SystemExit(f"\nERROR: {exc}\n")
-
-        # Auto horizon selection: forecast at every configured horizon; the
-        # operative one is chosen per-name later (shortest confident + TA-aligned).
-        # Total steps ~= one long forecast, so cost is similar.
+        # ── [4/6] Trade structure (forecast layer removed — see EXCISION_PLAN) ──
+        # No price forecast. Long-only per CONSTRAINTS (short signals are exclusion
+        # filters, never positions). Ranking = screen/evidence score; the trade plan
+        # comes from technical structure (entry_exit) + vol-based sizing.
+        status(f"[4/6] Building trade structure for {len(survivors)} names...")
         horizons = cfg.horizon_list
-        survivor_items = [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in survivors]
         forecasts_by_h: dict[int, dict] = {}
-
-        # Two-stage forecasting: when there are many survivors, sweep them all at
-        # LOW paths, keep a generous buffer of the highest-edge names, then refine
-        # ONLY that buffer at full paths. Heavy compute is spent on contenders, not
-        # on names that are clearly not in the running. The buffer (2x the final
-        # list) is wide, so only clearly-weak names are dropped on the cheap pass.
-        refine_n = max(2 * cfg.max_watchlist_size, 12)
-        screen_paths = cfg.kronos_screen_paths
-        if len(survivors) > refine_n and 0 < screen_paths < mc_paths:
-            status(f"      Stage 1/2: screening {len(survivors)} names at "
-                   f"{screen_paths} paths...")
-            stage1: dict[int, dict] = {}
-            for h in horizons:
-                stage1[h] = await kronos.forecast_batch(
-                    survivor_items, pred_len=h, n_paths=screen_paths)
-
-            def _edge(sym: str) -> float:
-                best = 0.0
-                for h in horizons:
-                    fc = stage1.get(h, {}).get(sym)
-                    if not fc:
-                        continue
-                    pu = fc.get("prob_up")
-                    er = fc.get("expected_return_pct")
-                    conf = abs((pu if isinstance(pu, (int, float)) else 0.5) - 0.5) * 2
-                    best = max(best, conf * abs(er if isinstance(er, (int, float)) else 0.0))
-                return best
-
-            ranked = sorted(survivors, key=lambda c: _edge(c.symbol), reverse=True)
-            refine = ranked[:refine_n]
-            status(f"      Stage 2/2: refining top {len(refine)} at {mc_paths} paths "
-                   f"({len(survivors) - len(refine)} dropped)...")
-            refine_items = [{"symbol": c.symbol, "ohlcv": c.ohlcv} for c in refine]
-            for h in horizons:
-                forecasts_by_h[h] = await kronos.forecast_batch(
-                    refine_items, pred_len=h, n_paths=mc_paths)
-            survivors = refine
-        else:
-            for h in horizons:
-                forecasts_by_h[h] = await kronos.forecast_batch(
-                    survivor_items, pred_len=h, n_paths=mc_paths)
-        forecasts = forecasts_by_h[max(horizons)]  # default for holdings/exits
-
+        forecasts: dict = {}
         benchmark_forecasts: list[dict] = []
-        if benchmark_symbols:
-            bench_ohlcv = await _gather_ohlcv(oa, benchmark_symbols, cfg.default_lookback)
-            bench_fc = await kronos.forecast_batch(
-                [{"symbol": s, "ohlcv": bench_ohlcv.get(s, [])} for s in benchmark_symbols],
-                pred_len=pred_len, n_paths=mc_paths)
-            benchmark_forecasts = [
-                {"symbol": sym, **fc} for sym, fc in bench_fc.items()
-            ]
-
-        # ── [5/6] Holdings review: forecast held names not already screened ─
         exits: list[dict] = []
-        review_syms = [s for s in held if s not in {c.symbol for c in survivors}]
-        if review_syms:
-            status(f"      Holdings review: forecasting {len(review_syms)} held names...")
-            held_ohlcv = await _gather_ohlcv(oa, review_syms, cfg.default_lookback)
-            held_fc = await kronos.forecast_batch(
-                [{"symbol": s, "ohlcv": held_ohlcv.get(s, [])} for s in review_syms],
-                pred_len=pred_len, n_paths=mc_paths)
-            all_held_fc = {**held_fc,
-                           **{c.symbol: forecasts[c.symbol] for c in survivors
-                              if c.symbol in held and c.symbol in forecasts}}
-            for sym, fc in all_held_fc.items():
-                if (fc.get("expected_return_pct") or 0) < 0:
-                    exits.append({"symbol": sym,
-                                  "expected_return_pct": fc.get("expected_return_pct"),
-                                  "prob_up": fc.get("prob_up")})
 
         # ── [6/6] Reports (concurrent, with backoff in the generator) ──────
         status(f"[6/6] Generating reports ({cfg.llm_provider})...")
         generator = ReportGenerator()
         sem = asyncio.Semaphore(8)
 
-        from scanner import forecast_calibration
-        from scanner import entry_exit, horizon as HZ
+        from scanner import entry_exit
         # Sector-relative valuation: median P/E across the scanned set, so each
         # name is judged cheap/rich vs its actual peers in this scan, not an
         # absolute threshold. Needs >=4 names with a usable P/E.
@@ -329,28 +249,15 @@ async def run_scan(args: argparse.Namespace) -> str | None:
         peer_median_pe = _stats.median(_pes) if len(_pes) >= 4 else None
 
         async def build_entry(cand):
-            # 1) Multi-horizon calibrated forecasts.
-            per_h = {}
-            for h in horizons:
-                raw = forecasts_by_h.get(h, {}).get(cand.symbol)
-                if raw:
-                    per_h[h] = forecast_calibration.apply(raw, cand.asset_class, h)
-            # 2) Choose the trade SIDE from the forecast: bullish -> long, bearish ->
-            #    short. Blend horizons so one noisy horizon can't flip the side.
-            probs = [v.get("prob_up") for v in per_h.values()
-                     if isinstance(v.get("prob_up"), (int, float))]
-            exps = [v.get("expected_return_pct") for v in per_h.values()
-                    if isinstance(v.get("expected_return_pct"), (int, float))]
-            if probs:
-                bullish = (sum(probs) / len(probs)) >= 0.5
-            else:
-                bullish = (sum(exps) / len(exps) if exps else 0.0) >= 0
-            side = "long" if bullish else "short"
-            # 3) Structure-based levels for THAT side.
+            # Forecast layer removed (see EXCISION_PLAN). Long-only per CONSTRAINTS;
+            # trade plan from technical structure; ranking from the screen score.
+            per_h: dict = {}
+            fc = None
+            side = "long"
             ta = entry_exit.analyze(cand.ohlcv, direction=side)
-            # 4) Operative horizon: shortest confident + forecast-agrees-with-trend.
-            sel = HZ.select(per_h, ta, horizons)
-            fc = per_h.get(sel.get("horizon_days")) if sel.get("horizon_days") else None
+            sel = {"horizon_days": max(horizons), "horizon_class": "swing",
+                   "agrees": ta.get("trend") == "up", "confidence": None,
+                   "term_structure": None}
             op_days = sel.get("horizon_days") or max(horizons)
             # 4b) Pick ONE stop so the user is never shown two competing exits.
             #   Trend-following trade (forecast agrees with trend + a continuation
@@ -450,35 +357,6 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                     else ta.get("trail_stop"))
                 report["setup"] = ta["setup"]
                 report["confluence"] = ta["confluence"]
-            # ── Full Kronos features ──
-            try:
-                from scanner import kronos_features as KF
-                if fc:
-                    report["_kronos_features"] = fc.get("features")
-                    # Real probability-weighted R:R from the path cloud + TA levels.
-                    if ta.get("entry_value") and ta.get("stop_value") and ta.get("target_value"):
-                        report["_barrier"] = KF.barrier_probabilities(
-                            fc, ta["entry_value"], ta["stop_value"], ta["target_value"])
-                    # For assets with no fundamentals, Kronos IS the quality score.
-                    if asset_class in ("crypto", "forex", "commodity", "index"):
-                        kq, kqbd = KF.kronos_quality(fc)
-                        report["_kronos_quality"] = kq
-                        report["_kronos_quality_breakdown"] = kqbd
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("kronos_features failed for %s: %s", cand.symbol, exc)
-            # Meta-model calibrated P(up), if one has been trained — additive.
-            try:
-                from scanner import meta_model
-                mp = meta_model.predict_proba({
-                    "predicted_return_pct": (fc or {}).get("expected_return_pct"),
-                    "prob_up": (fc or {}).get("prob_up"),
-                    "fund_score": cand.fund_score, "tech_score": cand.tech_score,
-                    "conviction": report.get("conviction"),
-                    "features": cand.indicators})
-                if mp is not None:
-                    report["_meta_prob_up"] = mp
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("meta_model failed for %s: %s", cand.symbol, exc)
             # Yahoo insights (their technical S/R + outlook) and peers — free,
             # best-effort, independent of OpenAlice. Equities/ETFs/indexes mostly.
             try:
@@ -491,19 +369,6 @@ async def run_scan(args: argparse.Namespace) -> str | None:
                     report["_peers"] = peers[:6]
             except Exception as exc:  # noqa: BLE001
                 logger.debug("yahoo insights/peers failed for %s: %s", cand.symbol, exc)
-            # Options / vol edge — Kronos vol vs implied vol, P(>strike), idea.
-            if asset_class in ("equity", "etf") and fc:
-                try:
-                    from scanner import options as OPT
-                    opt = await OPT.analyze(cand.symbol, fc, op_days)
-                    if opt.get("has_options"):
-                        report["_options"] = opt
-                        if opt.get("vol_call", "").startswith("options cheap"):
-                            report.setdefault("tags", []).append("vol_cheap")
-                        elif opt.get("vol_call", "").startswith("options rich"):
-                            report.setdefault("tags", []).append("vol_rich")
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("options failed for %s: %s", cand.symbol, exc)
             return {"report": report, "forecast": fc, "sector": cand.sector,
                     "asset_class": cand.asset_class,
                     "indicators": cand.indicators,
@@ -525,7 +390,6 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             "horizons": cfg.horizon_list,
             "mc_paths": mc_paths,
             "lookback": cfg.default_lookback,
-            "model": cfg.kronos_model,
         }
         watchlist["regime"] = regime_info
 
@@ -593,7 +457,6 @@ async def run_scan(args: argparse.Namespace) -> str | None:
             else:
                 status("      Telegram: nothing cleared the signal bar")
 
-    kronos.shutdown()
     return path
 
 
