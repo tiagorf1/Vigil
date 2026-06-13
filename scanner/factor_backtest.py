@@ -69,6 +69,8 @@ async def run(symbols, horizon, cuts, step=21, lookback=300, bars=1300) -> dict:
     ic = defaultdict(dict)        # factor -> {cut_k: ic}
     excess = defaultdict(dict)    # factor -> {cut_k: top-tercile fwd minus universe mean}
     members = defaultdict(dict)   # factor -> {cut_k: frozenset(top-tercile symbols)}
+    ls = defaultdict(dict)        # factor -> {cut_k: top-tercile minus bottom-tercile (long/short)}
+    bottom = defaultdict(dict)    # factor -> {cut_k: frozenset(bottom-tercile symbols)}
     for k in range(cuts):
         per_factor = defaultdict(list)
         fwd = {}
@@ -98,43 +100,57 @@ async def run(symbols, horizon, cuts, step=21, lookback=300, bars=1300) -> dict:
                 ic[name][k] = r
             ranked = sorted(pairs, key=lambda z: z[1])
             t = max(1, len(ranked) // 3)
-            top = ranked[-t:]
-            excess[name][k] = float(np.mean([fwd[s] for s, _ in top])) - univ_mean
+            top, bot = ranked[-t:], ranked[:t]
+            top_mean = float(np.mean([fwd[s] for s, _ in top]))
+            bot_mean = float(np.mean([fwd[s] for s, _ in bot]))
+            excess[name][k] = top_mean - univ_mean
+            ls[name][k] = top_mean - bot_mean
             members[name][k] = frozenset(s for s, _ in top)
-    return {"ic": ic, "excess": excess, "members": members}
+            bottom[name][k] = frozenset(s for s, _ in bot)
+    return {"ic": ic, "excess": excess, "members": members, "ls": ls, "bottom": bottom}
 
 
-def _factor_stats(name, ic, excess, members, cost_bps, holdout) -> dict | None:
+def _turnover(ks, mem):
+    ks = sorted(ks)
+    ts = []
+    for a, b in zip(ks, ks[1:]):
+        A, B = mem.get(a), mem.get(b)
+        if A and B:
+            ts.append(len(A ^ B) / (2 * max(len(A), 1)))
+    return float(np.mean(ts)) if ts else 0.0
+
+
+def _factor_stats(name, ic, excess, members, ls, bottom, cost_bps, holdout,
+                  horizon, cfd_annual) -> dict | None:
     cuts_sorted = sorted(excess.keys())          # ascending k (0 recent -> old)
     if len(cuts_sorted) < holdout + 6:
         holdout = max(0, len(cuts_sorted) // 4)   # adapt if short
     hold_k = set(cuts_sorted[:holdout])           # most-recent = holdout
     is_k = [k for k in cuts_sorted if k not in hold_k]
 
-    def turnover(ks):
-        ks = sorted(ks)
-        ts = []
-        for a, b in zip(ks, ks[1:]):
-            A, B = members.get(a), members.get(b)
-            if A and B:
-                ts.append(len(A ^ B) / (2 * max(len(A), 1)))
-        return float(np.mean(ts)) if ts else 0.0
+    cost = cost_bps / 1e4
+    # CFD overnight financing on the short leg, charged over the hold (trading days).
+    short_fin = (cfd_annual / 100.0) * (horizon / 252.0)
 
-    def net_excess(ks):
-        turn = turnover(ks)
-        drag = turn * cost_bps / 1e4
-        return [excess[k] - drag for k in ks if k in excess], turn
+    def net_long(ks):
+        drag = _turnover(ks, members) * cost          # long leg (Invest, no financing)
+        return [excess[k] - drag for k in ks if k in excess]
+
+    def net_ls(ks):
+        drag = (_turnover(ks, members) + _turnover(ks, bottom)) * cost + short_fin
+        return [ls[k] - drag for k in ks if k in ls]
 
     is_ic = [ic[k] for k in is_k if k in ic]
     if len(is_ic) < 6:
         return None
     ic_t, _ = labstats.newey_west_tstat(is_ic)
-    net_is, turn = net_excess(is_k)
+    net_is = net_long(is_k)
     gross_is = [excess[k] for k in is_k if k in excess]
     net_t, _ = labstats.newey_west_tstat(net_is)
     net_arr = np.asarray(net_is, float)
     sr = float(net_arr.mean() / net_arr.std()) if net_arr.std() > 0 else 0.0
-    net_hold, _ = net_excess(sorted(hold_k))
+    ls_is = net_ls(is_k)
+    ls_t, _ = labstats.newey_west_tstat(ls_is)
     return {
         "n_is": len(is_k), "n_holdout": len(hold_k),
         "mean_ic": round(float(np.mean(is_ic)), 4),
@@ -143,18 +159,22 @@ def _factor_stats(name, ic, excess, members, cost_bps, holdout) -> dict | None:
         "net_excess_pct": round(float(net_arr.mean()) * 100, 3),
         "net_tstat_nw": round(net_t, 2),
         "net_p": labstats.two_sided_p(net_t, len(net_is)),
-        "turnover_pct": round(turn * 100, 1),
+        "ls_net_pct": round(float(np.mean(ls_is)) * 100, 3) if ls_is else None,
+        "ls_net_tstat_nw": round(ls_t, 2),
+        "turnover_pct": round(_turnover(is_k, members) * 100, 1),
         "sharpe_per_reb": round(sr, 2),
-        "holdout_net_excess_pct": round(float(np.mean(net_hold)) * 100, 3) if net_hold else None,
+        "holdout_net_excess_pct": round(float(np.mean(net_long(sorted(hold_k)))) * 100, 3)
+        if hold_k else None,
         "desc": FACTORS[name][1],
     }
 
 
-def aggregate(raw, cost_bps, holdout, fdr_q=0.10) -> dict:
+def aggregate(raw, cost_bps, holdout, horizon, cfd_annual, fdr_q=0.10) -> dict:
     out = {}
     for name in FACTORS:
         st = _factor_stats(name, raw["ic"].get(name, {}), raw["excess"].get(name, {}),
-                           raw["members"].get(name, {}), cost_bps, holdout)
+                           raw["members"].get(name, {}), raw["ls"].get(name, {}),
+                           raw["bottom"].get(name, {}), cost_bps, holdout, horizon, cfd_annual)
         if st:
             out[name] = st
     # FDR across the factors tested (on the in-sample net-alpha p-values)
@@ -179,23 +199,26 @@ def main() -> None:
     ap.add_argument("--cost-bps", type=float, default=40.0,
                     help="round-trip cost in bps (T212 small/mid ~40-60)")
     ap.add_argument("--holdout", type=int, default=18, help="recent cuts reserved as holdout")
+    ap.add_argument("--cfd-annual-pct", type=float, default=7.0,
+                    help="CFD overnight financing, annual %% on the short leg")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     raw = asyncio.run(run(args.symbols, args.horizon, args.cuts))
-    res = aggregate(raw, args.cost_bps, args.holdout)
+    res = aggregate(raw, args.cost_bps, args.holdout, args.horizon, args.cfd_annual_pct)
     print(f"\n=== Factor lab  (horizon={args.horizon}d, {args.cuts} cuts, "
-          f"cost={args.cost_bps:.0f}bps round-trip, holdout={args.holdout}) ===")
-    print(f"{'factor':15} {'IC':>7} {'IC_t':>6} {'gross%':>7} {'net%':>7} {'net_t':>6} "
-          f"{'turn%':>6} {'FDR':>4} {'holdNet%':>8}  desc")
+          f"cost={args.cost_bps:.0f}bps, CFD fin={args.cfd_annual_pct:.0f}%/yr, holdout={args.holdout}) ===")
+    print(f"{'factor':15} {'IC':>7} {'IC_t':>6} {'Lnet%':>6} {'Lnet_t':>6} {'LSnet%':>6} {'LSnet_t':>7} "
+          f"{'turn%':>6} {'FDR':>4} {'hold%':>6}  desc")
     for name, v in sorted(res.items(), key=lambda kv: -abs(kv[1]["net_tstat_nw"])):
         def s(x): return f"{x:.3f}" if isinstance(x, (int, float)) else "  -  "
         print(f"{name:15} {s(v['mean_ic']):>7} {s(v['ic_tstat_nw']):>6} "
-              f"{s(v['gross_excess_pct']):>7} {s(v['net_excess_pct']):>7} {s(v['net_tstat_nw']):>6} "
-              f"{s(v['turnover_pct']):>6} {'Y' if v['fdr_pass'] else 'n':>4} "
-              f"{s(v['holdout_net_excess_pct']):>8}  {v['desc']}")
-    print("\nGate: net% > 0 with net_t(NW) clearing FDR, AND it survives the holdout column.")
-    print("net% = top-tercile minus universe mean, per month, AFTER costs (long-only).")
+              f"{s(v['net_excess_pct']):>6} {s(v['net_tstat_nw']):>6} {s(v['ls_net_pct']):>6} "
+              f"{s(v['ls_net_tstat_nw']):>7} {s(v['turnover_pct']):>6} {'Y' if v['fdr_pass'] else 'n':>4} "
+              f"{s(v['holdout_net_excess_pct']):>6}  {v['desc']}")
+    print("\nLnet = long-only top-tercile minus universe, net of cost (T212 Invest).")
+    print("LSnet = long top / short bottom, net of cost + CFD short financing.")
+    print("Gate: positive net with t(NW) clearing FDR, AND surviving the holdout.")
 
 
 if __name__ == "__main__":

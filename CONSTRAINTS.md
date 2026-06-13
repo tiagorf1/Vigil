@@ -7,15 +7,22 @@ edge. Update this when reality changes; date the changes.*
 Last updated: 2026-06-12
 
 ## Instruments
-- **Long equities** — US and European. Primary book.
-- **FX / commodities via CFD** — accessible but **financing costs eat slow
-  signals**; only fast-or-strong signals survive. Treated as a separate
-  diversifying sleeve, not the core.
-- **No options as an instrument.** Option-*implied* data may be used as a
-  *signal* to rank equities (you buy the stock, never the option).
-- **No practical single-name shorting.** Short *signals* are usable only as
-  **exclusion filters** on the long book (refuse to be long what informed shorts
-  lean on), never as standalone short positions.
+- **Equities — two execution venues:**
+  - **T212 Invest** (real fractional shares, ~0% commission, FX fee ~0.15%):
+    the home for *slow* signals (monthly+ holds) — **no overnight financing**.
+  - **T212 CFD** (5–10× leverage, **long AND short**): the home for *faster or
+    stronger* signals and for leverage. Carries **overnight financing** (~ESTR/SOFR
+    + ~3% annual on position value), which eats slow signals — so CFD is for
+    higher-conviction, shorter-hold, or leveraged positions, not slow tilts.
+- **Shorting IS available** (CFD), so short signals can be *positions*, not just
+  exclusion filters — but every short pays financing, so it must clear that bar net.
+- **Leverage is wanted** a good part of the time (CFD). The lab must therefore
+  report results both unlevered and with the financing cost of leverage/shorts.
+- **FX / commodities via CFD** — diversifying sleeve; same financing caveat.
+- **No options as an instrument** (signal-only; revisit if a viable broker appears).
+- **Brokerage is flexible** — currently T212; will switch for better fees/coverage.
+  Hard exclusions: **IBKR** (not usable here) and **tastytrade** (withdrawal cost
+  kills it). Any replacement must be available in Portugal/EU.
 
 ## Capital
 - **Small account.** The one structural advantage this buys is **capacity**:
