@@ -46,10 +46,9 @@ Last updated: 2026-06-12
   or UCITS wrappers; check tradability before relying on any ETF in production.
 
 ## TO CONFIRM (operator must fill — these change the hypothesis space)
-- [ ] **Broker(s)** and what they actually permit (CFD venue? fractional shares?
-      US small-cap access? European small-cap access? borrow availability if any?).
-- [ ] **Account size band** (sets the liquidity floor / min position / # names).
-- [ ] **WRDS graduation / access-end date** (the lab clock — drives sequencing).
-- [ ] **Hours/week** available for the research loop + monthly autopsy.
-- [ ] **Any** options execution at all (even index), or strictly signal-only?
-- [ ] Existing positions / starting book to respect.
+- [ ] **Broker(s)** Trading212
+- [ ] **Account size band** 500€ up to 5x or 10x margin on CFD account
+- [ ] **WRDS graduation / access-end date** May 10, 2028 (reported on page)
+- [ ] **Hours/week** 10.
+- [ ] **Any** options execution at all (even index), or strictly signal-only? maybe in the future but not until the right brokerage is found
+- [ ] Existing positions / starting book to respect.Clean book, nothing
