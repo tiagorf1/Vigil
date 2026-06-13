@@ -40,3 +40,6 @@ portfolio.json
 # leaked once; never track secrets
 worker_token.rtf
 *.rtf
+
+# WRDS extracts — academic license, never commit
+data/
