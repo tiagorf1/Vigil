@@ -43,3 +43,6 @@ worker_token.rtf
 
 # WRDS extracts — academic license, never commit
 data/
+
+# stray R history
+.Rhistory
